@@ -876,69 +876,10 @@ impl VillagerEntity {
             ExperienceOrbEntity::spawn(world, self.get_entity().pos.load(), xp_gain as u32);
         }
 
-        if let Some(player) = world.get_player_by_uuid(player_uuid) {
-            {
-                let mut gossips = self
-                    .gossips
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let value = gossips
-                    .entry(player_uuid)
-                    .or_default()
-                    .entry(GossipType::Trading)
-                    .or_default();
-                *value = (*value + 2).min(GossipType::Trading.max_value());
-            };
-            self.resend_offers_to_player(&player);
-        }
-    }
-
-    fn resend_offers_to_player(&self, player: &Arc<Player>) {
-        let trading_player = *self
-            .trading_player
+        *self
+            .last_traded_player
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some((player_uuid, sync_id)) = trading_player else {
-            return;
-        };
-        if player.get_entity().entity_uuid != player_uuid {
-            return;
-        }
-        let offers = self
-            .offers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        let villager_data = *self
-            .villager_data
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        let ok = {
-            let screen = player
-                .current_screen_handler
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            let mut screen = screen
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if screen.sync_id() != sync_id {
-                false
-            } else if let Some(handler) =
-                screen.as_any_mut().downcast_mut::<MerchantScreenHandler>()
-            {
-                handler.offers.clone_from(&offers);
-                handler.update_result_slot();
-                true
-            } else {
-                false
-            }
-        };
-        if !ok {
-            return;
-        }
-        self.send_trade_offers(player, sync_id, &offers, villager_data);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(player_uuid);
     }
 
     fn resend_offers_to_trading_player(&self) {
@@ -1605,6 +1546,19 @@ impl VillagerEntity {
                 .or_default();
             *value = (*value + 2).min(GossipType::Trading.max_value());
             drop(gossips);
+            // Villager.onReputationEventFrom: the trade refreshes the offers from this tick,
+            // never from the trade click, which holds the screen handler lock.
+            let trading_player = self
+                .trading_player
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .map(|(uuid, _)| uuid);
+            if trading_player == Some(player_uuid)
+                && let Some(player) = world.get_player_by_uuid(player_uuid)
+            {
+                self.update_special_prices(&player);
+                self.resend_offers_to_trading_player();
+            }
             world.send_entity_status(
                 self.get_entity(),
                 pumpkin_data::entity::EntityStatus::VillagerHappy,

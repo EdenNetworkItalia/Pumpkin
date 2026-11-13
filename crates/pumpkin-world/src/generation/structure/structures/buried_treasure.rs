@@ -47,9 +47,21 @@ pub struct BuriedTreasurePiece {
     piece: StructurePiece,
 }
 
+impl BuriedTreasurePiece {
+    /// Vanilla `BuriedTreasurePiece(CompoundTag)`: the piece has no fields of its own.
+    #[must_use]
+    pub const fn from_tag(piece: StructurePiece) -> Self {
+        Self { piece }
+    }
+}
+
 impl StructurePieceBase for BuriedTreasurePiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, _tag: &mut NbtCompound) -> bool {
+        true
     }
 
     fn get_structure_piece(&self) -> &StructurePiece {

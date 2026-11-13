@@ -201,7 +201,7 @@ impl VanillaGenerator {
             |key| wanted.contains(&key),
         )
         .iter()
-        .any(|(_, collector)| {
+        .any(|(_, _, collector)| {
             collector
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)

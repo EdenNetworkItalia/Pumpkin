@@ -8,10 +8,23 @@
 //! }
 //! ```
 
-use pumpkin_data::structures::StructureKeys;
+use std::sync::{Arc, Mutex};
+
+use pumpkin_data::structures::{Structure, StructureKeys, StructureType};
 use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
-use pumpkin_util::math::{block_box::BlockBox, vector2::Vector2};
+use pumpkin_util::{
+    BlockDirection,
+    math::{block_box::BlockBox, position::BlockPos, vector2::Vector2},
+};
 use tracing::{error, warn};
+
+use super::{
+    piece::StructurePieceType,
+    structures::{
+        StructurePiece, StructurePieceBase, StructurePiecesCollector, StructurePosition,
+        buried_treasure::BuriedTreasurePiece, ocean_monument,
+    },
+};
 
 /// The chessboard distance in chunks past which vanilla drops a saved reference on load.
 const MAX_REFERENCE_DISTANCE: u32 = 8;
@@ -20,6 +33,17 @@ const MAX_REFERENCE_DISTANCE: u32 = 8;
 #[must_use]
 pub fn structure_id(structure: StructureKeys) -> String {
     format!("minecraft:{}", structure.to_name())
+}
+
+/// The path of an identifier in the `minecraft` namespace, as vanilla `Identifier.parse` reads
+/// it: an id without a namespace is in `minecraft`. `None` for another namespace.
+#[must_use]
+pub fn minecraft_path(id: &str) -> Option<&str> {
+    match id.split_once(':') {
+        Some(("minecraft", path)) => Some(path),
+        Some(_) => None,
+        None => Some(id),
+    }
 }
 
 /// Vanilla `ChunkPos.pack`.
@@ -64,6 +88,26 @@ impl SavedStructures {
             starts,
             references,
         }
+    }
+
+    /// The saved start of `structure`, when `starts` holds a valid one.
+    #[must_use]
+    pub fn start_tag(&self, structure: StructureKeys) -> Option<&NbtCompound> {
+        if !self
+            .starts
+            .as_ref()?
+            .iter()
+            .any(|(saved, _)| *saved == structure)
+        {
+            return None;
+        }
+        let (_, tag) = self
+            .tag
+            .get_compound("starts")?
+            .child_tags
+            .iter()
+            .find(|(key, _)| StructureKeys::from_name(key) == Some(structure))?;
+        tag.extract_compound()
     }
 }
 
@@ -157,6 +201,131 @@ fn saved_references(
         }
     }
     out
+}
+
+/// Vanilla `StructureStart.createTag` for a start of `structure` that Pumpkin generated.
+///
+/// Returns `None` when a piece type cannot be saved yet. Pumpkin does not count the explorer
+/// maps that point to a start, so `references` is 0 unless the caller keeps a saved count.
+#[must_use]
+pub fn create_tag(
+    structure: StructureKeys,
+    chunk_pos: Vector2<i32>,
+    collector: &StructurePiecesCollector,
+) -> Option<NbtCompound> {
+    let children = collector
+        .pieces
+        .iter()
+        .map(|piece| create_piece_tag(piece.as_ref()).map(NbtTag::Compound))
+        .collect::<Option<Vec<_>>>()?;
+    let mut tag = NbtCompound::new();
+    tag.put_string("id", structure_id(structure));
+    tag.put_int("ChunkX", chunk_pos.x);
+    tag.put_int("ChunkZ", chunk_pos.y);
+    tag.put_int("references", 0);
+    tag.put_list("Children", children);
+    Some(tag)
+}
+
+/// Vanilla `StructurePiece.createTag`.
+fn create_piece_tag(piece: &dyn StructurePieceBase) -> Option<NbtCompound> {
+    let base = piece.get_structure_piece();
+    let bounding_box = piece.bounding_box();
+    let mut tag = NbtCompound::new();
+    tag.put_string("id", base.r#type.id().to_string());
+    tag.put(
+        "BB",
+        NbtTag::IntArray(vec![
+            bounding_box.min.x,
+            bounding_box.min.y,
+            bounding_box.min.z,
+            bounding_box.max.x,
+            bounding_box.max.y,
+            bounding_box.max.z,
+        ]),
+    );
+    tag.put_int("O", data_2d_value(base.facing));
+    tag.put_int("GD", base.chain_length as i32);
+    piece.add_additional_save_data(&mut tag).then_some(tag)
+}
+
+/// Vanilla `StructureStart.loadStaticStart` for the saved start of `structure`.
+///
+/// Returns `None` when a piece fails to load, so that the caller computes the start again.
+/// Vanilla `PiecesContainer.load` would drop the piece and place the start without it.
+#[must_use]
+pub fn load_start(
+    structure: StructureKeys,
+    tag: &NbtCompound,
+    seed: i64,
+    sea_level: i32,
+) -> Option<StructurePosition> {
+    let chunk_pos = Vector2::new(
+        tag.get_int("ChunkX").unwrap_or(0),
+        tag.get_int("ChunkZ").unwrap_or(0),
+    );
+    let children = tag.get_list("Children").unwrap_or_default();
+    let mut collector = if Structure::get(&structure).structure_type == StructureType::OceanMonument
+    {
+        let top_piece = children.first()?.extract_compound()?;
+        let top_piece = StructurePiece::from_tag(StructurePieceType::OceanMonumentBase, top_piece)?;
+        ocean_monument::regenerate_pieces_after_load(chunk_pos, seed, sea_level, &top_piece)
+    } else {
+        let mut collector = StructurePiecesCollector::default();
+        for child in children {
+            collector.add_piece(load_piece(child.extract_compound()?)?);
+        }
+        collector
+    };
+    if collector.is_empty() {
+        return None;
+    }
+    // Vanilla does not save the position the generator picked; only the generator reads it.
+    let bounding_box = collector.get_bounding_box();
+    Some(StructurePosition {
+        start_pos: BlockPos::new(bounding_box.min.x, bounding_box.min.y, bounding_box.min.z),
+        collector: Arc::new(Mutex::new(collector)),
+    })
+}
+
+/// Vanilla `StructurePieceType.load` for the piece types that Pumpkin can load.
+fn load_piece(tag: &NbtCompound) -> Option<Box<dyn StructurePieceBase>> {
+    let id = tag.get_string("id").unwrap_or_default();
+    let Some(piece_type) = StructurePieceType::from_id(id) else {
+        error!("Unknown structure piece id: {id}");
+        return None;
+    };
+    let piece = StructurePiece::from_tag(piece_type, tag)?;
+    Some(match piece_type {
+        StructurePieceType::BuriedTreasure => Box::new(BuriedTreasurePiece::from_tag(piece)),
+        _ => return None,
+    })
+}
+
+/// Vanilla `Direction.get2DDataValue`, with -1 for no orientation as `StructurePiece` writes it.
+#[must_use]
+pub const fn data_2d_value(facing: Option<BlockDirection>) -> i32 {
+    match facing {
+        Some(BlockDirection::South) => 0,
+        Some(BlockDirection::West) => 1,
+        Some(BlockDirection::North) => 2,
+        Some(BlockDirection::East) => 3,
+        _ => -1,
+    }
+}
+
+/// Vanilla `Direction.from2DDataValue`, with -1 for no orientation as `StructurePiece` reads it.
+#[must_use]
+pub const fn direction_from_2d_data_value(value: i32) -> Option<BlockDirection> {
+    match value {
+        -1 => None,
+        value => Some(match (value % 4).abs() {
+            0 => BlockDirection::South,
+            1 => BlockDirection::West,
+            2 => BlockDirection::North,
+            _ => BlockDirection::East,
+        }),
+    }
 }
 
 /// Whether the `structures` tag has the `starts` compound, which vanilla always writes.

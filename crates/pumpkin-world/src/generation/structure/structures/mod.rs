@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use pumpkin_data::{Block, BlockId, BlockState};
 use pumpkin_data::{Mirror, Rotation};
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::HeightMap;
 use pumpkin_util::{
     BlockDirection,
@@ -10,6 +11,7 @@ use pumpkin_util::{
 };
 use tracing::trace;
 
+use crate::generation::structure::start;
 use crate::generation::structure::structures::stronghold::StrongholdPieceType;
 pub use crate::world::WorldPortalExt;
 use crate::{
@@ -56,6 +58,14 @@ pub trait StructurePieceBase: Send + Sync {
 
     fn translate(&mut self, x: i32, y: i32, z: i32) {
         self.get_structure_piece_mut().translate(x, y, z);
+    }
+
+    /// Vanilla `StructurePiece.addAdditionalSaveData`: writes the fields of this piece type.
+    ///
+    /// Returns `false` for a piece type that Pumpkin cannot save yet. The start that holds it
+    /// is then left out of the chunk save, because vanilla would place an incomplete piece.
+    fn add_additional_save_data(&self, _tag: &mut NbtCompound) -> bool {
+        false
     }
 
     /// Places the blocks for this piece into the chunk.
@@ -108,6 +118,24 @@ impl StructurePiece {
             rotation: Rotation::None,
             chain_length,
         }
+    }
+
+    /// Vanilla `StructurePiece(StructurePieceType, CompoundTag)`: the fields that
+    /// `StructurePiece.createTag` writes for every piece type.
+    #[must_use]
+    pub fn from_tag(r#type: StructurePieceType, tag: &NbtCompound) -> Option<Self> {
+        let &[min_x, min_y, min_z, max_x, max_y, max_z] = tag.get_int_array("BB")? else {
+            return None;
+        };
+        let mut piece = Self::new(
+            r#type,
+            BlockBox::new(min_x, min_y, min_z, max_x, max_y, max_z),
+            tag.get_int("GD").unwrap_or(0) as u32,
+        );
+        piece.set_facing(start::direction_from_2d_data_value(
+            tag.get_int("O").unwrap_or(0),
+        ));
+        Some(piece)
     }
 
     pub const fn set_facing(&mut self, facing: Option<BlockDirection>) {
@@ -580,8 +608,6 @@ impl StructurePiece {
         loot_table: &str,
         block_state: Option<&'static BlockState>,
     ) -> bool {
-        use pumpkin_nbt::compound::NbtCompound;
-
         let world_pos = self.offset_pos(x, y, z);
         if !bb.contains_pos(&world_pos) {
             return false;
@@ -624,7 +650,6 @@ impl StructurePiece {
         loot_table: &str,
     ) -> bool {
         use pumpkin_data::block_properties::DispenserLikeProperties;
-        use pumpkin_nbt::compound::NbtCompound;
 
         let world_pos = self.offset_pos(x, y, z);
         if !bb.contains_pos(&world_pos) {

@@ -14,7 +14,7 @@ use pumpkin_util::random::xoroshiro128::XoroshiroSplitter;
 use pumpkin_util::random::{RandomImpl, get_large_feature_seed, legacy_rand::LegacyRand};
 use pumpkin_util::{
     HeightMap,
-    math::{block_box::BlockBox, position::BlockPos, vector3::Vector3},
+    math::{block_box::BlockBox, position::BlockPos, vector2::Vector2, vector3::Vector3},
     random::{RandomGenerator, get_decorator_seed, worldgen_random::WorldgenRandom},
 };
 use rustc_hash::FxHashMap;
@@ -51,8 +51,10 @@ use crate::generation::noise::{CHUNK_DIM, ChunkNoiseGenerator, LAVA_BLOCK, WATER
 use crate::generation::section_coords::section_to_block;
 use crate::generation::structure::lazily_generate_structure;
 use crate::generation::structure::placement::should_generate_structure;
+use crate::generation::structure::start::{self, SavedStructures};
 use crate::generation::structure::structures::{
-    StructureGeneratorContext, StructureInstance, StructurePiecesCollector, create_chunk_random,
+    StructureGeneratorContext, StructureInstance, StructurePiecesCollector, StructurePosition,
+    create_chunk_random,
 };
 use crate::generation::surface::rule::try_apply_material_rule;
 use crate::{
@@ -61,7 +63,7 @@ use crate::{
     world::{BlockAccessor, WorldPortalExt},
 };
 use pumpkin_data::tag::get_tag_ids;
-use pumpkin_nbt::compound::NbtCompound;
+use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
 
 use crate::generation::structure::template::BlockPlacer;
 use crate::tick::{ScheduledTick, TickPriority};
@@ -134,6 +136,13 @@ impl FluidLevelSamplerImpl for StandardChunkFluidLevelSampler {
     }
 }
 
+/// A start that reaches a chunk: the structure, the start chunk and the pieces.
+pub(crate) type StructureReference = (
+    StructureKeys,
+    Vector2<i32>,
+    Arc<Mutex<StructurePiecesCollector>>,
+);
+
 pub struct ProtoChunk {
     pub x: i32,
     pub z: i32,
@@ -148,8 +157,10 @@ pub struct ProtoChunk {
     pub flat_motion_blocking_height_map: [i16; CHUNK_AREA],
     pub flat_motion_blocking_no_leaves_height_map: [i16; CHUNK_AREA],
     pub(crate) structure_starts: FxHashMap<StructureKeys, StructureInstance>,
-    pub(crate) structure_references: Vec<(StructureKeys, Arc<Mutex<StructurePiecesCollector>>)>,
-    /// The `structures` tag this chunk was loaded with, written back unchanged on save.
+    /// The structure, the start chunk and the pieces of every start that reaches this chunk.
+    pub(crate) structure_references: Vec<StructureReference>,
+    /// The `structures` tag this chunk was loaded with. The save keeps the entries that this
+    /// chunk cannot write itself.
     saved_structures: NbtCompound,
 
     height: u16,
@@ -208,7 +219,7 @@ impl ProtoChunk {
     #[cfg(test)]
     pub(crate) fn has_structure(&self, key: StructureKeys) -> bool {
         self.structure_starts.contains_key(&key)
-            || self.structure_references.iter().any(|(k, _)| *k == key)
+            || self.structure_references.iter().any(|(k, _, _)| *k == key)
     }
 
     #[must_use]
@@ -412,23 +423,181 @@ impl ProtoChunk {
         if let super::generator::WorldGenerator::Noise(generator) = generator
             && (StagedChunkEnum::StructureStart..StagedChunkEnum::Features).contains(&saved_stage)
         {
-            // Structure starts and references are currently transient proto-chunk data.
-            // Rebuild them when resuming a partially generated chunk so structures that
-            // cross chunk boundaries are not truncated at the unload boundary.
+            // The pieces are placed in the features step, so a chunk that resumes before it needs
+            // its starts and references back. Saved ones come first; the rest is computed again.
             proto_chunk.stage = StagedChunkEnum::Biomes;
+            for (structure, position) in Self::load_saved_starts(chunk_data, generator) {
+                proto_chunk
+                    .structure_starts
+                    .insert(structure, StructureInstance::Start(position));
+            }
             proto_chunk.set_structure_starts(generator);
             if saved_stage >= StagedChunkEnum::StructureReferences {
-                proto_chunk.set_structure_references(generator);
+                proto_chunk.set_saved_structure_references(generator, &chunk_data.structures);
             }
             proto_chunk.stage = saved_stage;
+        } else if saved_stage >= StagedChunkEnum::StructureStart {
+            Self::register_saved_starts(chunk_data, generator);
         }
         proto_chunk
     }
 
-    /// The vanilla `structures` tag to save with this chunk.
+    /// Reads the saved starts of `chunk_data` into the structure cache, so that the chunks
+    /// around it place the saved pieces of its structures, as vanilla reads the start chunk.
+    pub fn register_saved_starts(
+        chunk_data: &ChunkData,
+        generator: &super::generator::WorldGenerator,
+    ) {
+        if let super::generator::WorldGenerator::Noise(generator) = generator {
+            Self::load_saved_starts(chunk_data, generator);
+        }
+    }
+
+    /// The starts of the structures that `chunk_data` saved a start for.
+    ///
+    /// A cached start wins over the saved one: the chunks around the start chunk may have moved
+    /// its pieces since the chunk was saved, as a height adjustment does. A saved start that
+    /// loads goes into the cache when the cache holds none.
+    fn load_saved_starts(
+        chunk_data: &ChunkData,
+        generator: &super::generator::VanillaGenerator,
+    ) -> Vec<(StructureKeys, StructurePosition)> {
+        if StagedChunkEnum::from(chunk_data.status) < StagedChunkEnum::StructureStart {
+            return Vec::new();
+        }
+        let Some(starts) = &chunk_data.structures.starts else {
+            return Vec::new();
+        };
+        let seed = generator.random_config.seed as i64;
+        let sea_level = generator.settings.sea_level;
+        let cache = &generator.global_structure_cache;
+        starts
+            .iter()
+            .filter_map(|&(structure, _)| {
+                let position = if let Some(cached) =
+                    cache.cached_structure_start(structure, chunk_data.x, chunk_data.z)
+                {
+                    cached?
+                } else {
+                    let tag = chunk_data.structures.start_tag(structure)?;
+                    let loaded = start::load_start(structure, tag, seed, sea_level)?;
+                    cache.get_or_compute_structure_start(
+                        structure,
+                        chunk_data.x,
+                        chunk_data.z,
+                        || Some(loaded),
+                    )?
+                };
+                Some((structure, position))
+            })
+            .collect()
+    }
+
+    /// Vanilla `SerializableChunkData.unpackStructureReferences` for a chunk that resumes.
+    ///
+    /// The saved references are complete, as in vanilla. Each start comes from the cache.
+    /// Pumpkin does not load the start chunk, so a start that is not cached is computed again
+    /// and kept when it reaches this chunk.
+    fn set_saved_structure_references(
+        &mut self,
+        generator: &super::generator::VanillaGenerator,
+        structures: &SavedStructures,
+    ) {
+        let Some(saved) = &structures.references else {
+            self.set_structure_references(generator);
+            return;
+        };
+        let cache = &generator.global_structure_cache;
+        let mut recompute = Vec::new();
+        for &(structure, start_chunk) in saved {
+            match cache.cached_structure_start(structure, start_chunk.x, start_chunk.y) {
+                Some(Some(position)) => {
+                    self.add_structure_reference((structure, start_chunk, position.collector));
+                }
+                Some(None) => {}
+                None => recompute.push((structure, start_chunk)),
+            }
+        }
+        if !recompute.is_empty() {
+            let chunk_min_y = (self.generation_bottom_y() as i32).max(self.bottom_y() as i32);
+            let chunk_height = self.generation_height().min(self.height());
+            let computed = Self::structure_references_in_chunk(
+                generator,
+                self.x,
+                self.z,
+                chunk_min_y,
+                chunk_height,
+                |key| recompute.iter().any(|(named, _)| *named == key),
+            );
+            for reference in computed {
+                if recompute.contains(&(reference.0, reference.1)) {
+                    self.add_structure_reference(reference);
+                }
+            }
+        }
+        self.stage = StagedChunkEnum::StructureReferences;
+    }
+
+    /// The vanilla `structures` tag to save with this chunk, as
+    /// `SerializableChunkData.packStructureData` builds it.
+    ///
+    /// A start that this chunk holds is written when every piece type can be saved, and every
+    /// reference is written. The entries of the tag that the chunk was loaded with stay.
     #[must_use]
     pub fn structure_data(&self) -> NbtCompound {
-        self.saved_structures.clone()
+        if self.stage < StagedChunkEnum::StructureStart {
+            return self.saved_structures.clone();
+        }
+        let chunk_pos = Vector2::new(self.x, self.z);
+        let mut starts = self
+            .saved_structures
+            .get_compound("starts")
+            .cloned()
+            .unwrap_or_default();
+        for (structure, instance) in &self.structure_starts {
+            let StructureInstance::Start(position) = instance else {
+                continue;
+            };
+            let collector = position
+                .collector
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(mut tag) = start::create_tag(*structure, chunk_pos, &collector) {
+                let key = start::structure_id(*structure);
+                // Pumpkin does not count the explorer maps that point to a start: keep the count
+                // that the start was loaded with.
+                if let Some(references) = starts
+                    .get_compound(&key)
+                    .and_then(|saved| saved.get_int("references"))
+                {
+                    tag.put_int("references", references);
+                }
+                starts.put_compound(&key, tag);
+            }
+        }
+        let mut references = self
+            .saved_structures
+            .get_compound("References")
+            .cloned()
+            .unwrap_or_default();
+        for (structure, start_chunk, _) in &self.structure_references {
+            let packed = start::pack_chunk_pos(start_chunk.x, start_chunk.y);
+            let key: Box<str> = start::structure_id(*structure).into();
+            match references
+                .child_tags
+                .entry(key)
+                .or_insert_with(|| NbtTag::LongArray(Vec::new()))
+            {
+                NbtTag::LongArray(packed_starts) if !packed_starts.contains(&packed) => {
+                    packed_starts.push(packed);
+                }
+                _ => {}
+            }
+        }
+        let mut tag = NbtCompound::new();
+        tag.put_compound("starts", starts);
+        tag.put_compound("References", references);
+        tag
     }
 
     #[inline]
@@ -849,7 +1018,7 @@ impl ProtoChunk {
                 };
                 (k, col)
             })
-            .chain(self.structure_references.iter().map(|(k, col)| (k, col)))
+            .chain(self.structure_references.iter().map(|(k, _, col)| (k, col)))
         {
             if seen_collectors
                 .iter()
@@ -1494,7 +1663,7 @@ impl ProtoChunk {
                     }
                 }
 
-                for (id, collector_arc) in &center_chunk.structure_references {
+                for (id, _, collector_arc) in &center_chunk.structure_references {
                     if *id == structure_key && !tasks.iter().any(|t| Arc::ptr_eq(t, collector_arc))
                     {
                         tasks.push(collector_arc.clone());
@@ -1629,6 +1798,15 @@ impl ProtoChunk {
                 continue;
             }
 
+            // A set has at most one start per chunk, and a start read from chunk data wins.
+            if set
+                .structures
+                .iter()
+                .any(|entry| self.structure_starts.contains_key(&entry.structure))
+            {
+                continue;
+            }
+
             if !should_generate_structure(&set.placement, calculator, self.x, self.z, global_cache)
             {
                 continue;
@@ -1731,7 +1909,7 @@ impl ProtoChunk {
         chunk_min_y: i32,
         chunk_height: u16,
         wanted: impl Fn(StructureKeys) -> bool,
-    ) -> Vec<(StructureKeys, Arc<Mutex<StructurePiecesCollector>>)> {
+    ) -> Vec<StructureReference> {
         let random_config = &generator.random_config;
         let settings = generator.settings;
         let noise_router = &generator.base_router;
@@ -1871,7 +2049,11 @@ impl ProtoChunk {
                                 .get_adjusted_bounding_box(&entry.structure)
                                 .intersects_raw_xz(start_x, start_z, end_x, end_z)
                         {
-                            references.push((entry.structure, start_data.collector));
+                            references.push((
+                                entry.structure,
+                                Vector2::new(candidate_chunk_x, candidate_chunk_z),
+                                start_data.collector,
+                            ));
                         }
                         break;
                     }
@@ -1899,14 +2081,19 @@ impl ProtoChunk {
             |_| true,
         );
 
-        for (key, pos) in references {
-            self.structure_starts
-                .entry(key)
-                .or_insert_with(|| StructureInstance::Reference(pos.clone()));
-            self.structure_references.push((key, pos));
+        for reference in references {
+            self.add_structure_reference(reference);
         }
 
         self.stage = StagedChunkEnum::StructureReferences;
+    }
+
+    fn add_structure_reference(&mut self, reference: StructureReference) {
+        let (key, _, collector) = &reference;
+        self.structure_starts
+            .entry(*key)
+            .or_insert_with(|| StructureInstance::Reference(collector.clone()));
+        self.structure_references.push(reference);
     }
 
     const fn start_cell_x(&self, horizontal_cell_block_count: i32) -> i32 {

@@ -9,6 +9,8 @@ pub mod resume;
 #[cfg(test)]
 pub mod stage_parity;
 #[cfg(test)]
+pub mod structure_saves;
+#[cfg(test)]
 pub mod structure_starts;
 
 #[cfg(test)]

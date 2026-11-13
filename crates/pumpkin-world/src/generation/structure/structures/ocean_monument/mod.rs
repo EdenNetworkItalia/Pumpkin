@@ -8,7 +8,7 @@ use pumpkin_data::{Block, BlockState};
 use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
 use pumpkin_util::{
     BlockDirection,
-    math::{block_box::BlockBox, position::BlockPos, vector3::Vector3},
+    math::{block_box::BlockBox, position::BlockPos, vector2::Vector2, vector3::Vector3},
     random::{RandomGenerator, RandomImpl},
 };
 
@@ -23,7 +23,7 @@ use crate::{
             piece::StructurePieceType,
             structures::{
                 StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
-                StructurePiecesCollector, StructurePosition, WorldPortalExt,
+                StructurePiecesCollector, StructurePosition, WorldPortalExt, create_chunk_random,
             },
         },
     },
@@ -113,6 +113,28 @@ impl StructureGenerator for OceanMonumentGenerator {
             collector: Arc::new(Mutex::new(collector)),
         })
     }
+}
+
+/// Vanilla `OceanMonumentStructure.regeneratePiecesAfterLoad`: vanilla saves no room of the
+/// monument, so it builds the monument again from the box and orientation of the first piece.
+pub(crate) fn regenerate_pieces_after_load(
+    chunk_pos: Vector2<i32>,
+    seed: i64,
+    sea_level: i32,
+    top_piece: &StructurePiece,
+) -> StructurePiecesCollector {
+    let mut random = create_chunk_random(seed, chunk_pos.x, chunk_pos.y);
+    let default_orientation = BlockDirection::get_random_horizontal_direction(&mut random);
+    let building = MonumentBuilding::new(
+        &mut random,
+        top_piece.bounding_box.min.x,
+        top_piece.bounding_box.min.z,
+        top_piece.facing.unwrap_or(default_orientation),
+        sea_level,
+    );
+    let mut collector = StructurePiecesCollector::default();
+    collector.add_piece(Box::new(building));
+    collector
 }
 
 struct MonumentBuilding {
@@ -211,6 +233,10 @@ impl MonumentBuilding {
 impl StructurePieceBase for MonumentBuilding {
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.base.piece
+    }
+
+    fn add_additional_save_data(&self, _tag: &mut NbtCompound) -> bool {
+        true
     }
 
     fn get_structure_piece_mut(&mut self) -> &mut StructurePiece {
@@ -521,7 +547,11 @@ mod tests {
         },
     };
 
-    use super::{MonumentBuilding, OceanMonumentGenerator, elder_guardian_nbt};
+    use super::{
+        MonumentBuilding, OceanMonumentGenerator, Vector2, elder_guardian_nbt,
+        regenerate_pieces_after_load,
+    };
+    use crate::generation::structure::structures::{StructurePiecesCollector, create_chunk_random};
 
     struct OceanFloorSampler;
 
@@ -555,6 +585,53 @@ mod tests {
             .unwrap();
 
         assert_eq!(position.start_pos.0.y, 37);
+    }
+
+    /// Vanilla saves no room of a monument. Building it again from the saved first piece must
+    /// give the rooms that the generator built.
+    #[test]
+    fn regenerated_monument_has_the_generated_rooms() {
+        let (seed, chunk_x, chunk_z) = (0, -71, -15);
+        let mut height_sampler = OceanFloorSampler;
+        let context = StructureGeneratorContext {
+            seed,
+            chunk_x,
+            chunk_z,
+            random: create_chunk_random(seed, chunk_x, chunk_z),
+            sea_level: 63,
+            min_y: -64,
+            height: 384,
+            height_sampler: Some(&mut height_sampler),
+            structure_key: None,
+        };
+        let position = OceanMonumentGenerator
+            .get_structure_position(context)
+            .unwrap();
+        let generated = position.collector.lock().unwrap();
+        let regenerated = regenerate_pieces_after_load(
+            Vector2::new(chunk_x, chunk_z),
+            seed,
+            63,
+            generated.pieces[0].get_structure_piece(),
+        );
+
+        let rooms = |collector: &StructurePiecesCollector| {
+            let building = collector.pieces[0]
+                .as_any()
+                .downcast_ref::<MonumentBuilding>()
+                .unwrap();
+            building
+                .children
+                .iter()
+                .map(|room| (room.piece.piece.bounding_box, room.piece.piece.facing))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(regenerated.pieces.len(), 1);
+        assert_eq!(
+            regenerated.pieces[0].bounding_box(),
+            generated.pieces[0].bounding_box()
+        );
+        assert_eq!(rooms(&regenerated), rooms(&generated));
     }
 
     #[test]

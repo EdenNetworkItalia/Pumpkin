@@ -214,6 +214,24 @@ impl GlobalStructureCache {
         start.get_or_init(compute).clone()
     }
 
+    /// The cached start of `key` at the start chunk, without computing it: `None` when it was
+    /// neither computed nor read from chunk data, `Some(None)` when the chunk has no start.
+    #[must_use]
+    pub fn cached_structure_start(
+        &self,
+        key: StructureKeys,
+        chunk_x: i32,
+        chunk_z: i32,
+    ) -> Option<Option<StructurePosition>> {
+        let start = self
+            .structure_starts
+            .get()?
+            .get(&(key, chunk_x, chunk_z))?
+            .value()
+            .clone();
+        start.get().cloned()
+    }
+
     /// Calculates the 128 ring positions matching vanilla Minecraft's
     /// `ChunkGeneratorStructureState.generateRingPositions` exactly.
     #[must_use]

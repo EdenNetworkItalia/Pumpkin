@@ -9,6 +9,8 @@ fo = "fo"
 undescore = "undescore"
 replaceables = "replaceables"
 convertable = "convertable"
+# Vanilla structure piece id of the stronghold straight corridor (`minecraft:shs`)
+shs = "shs"
 
 [default.extend-identifiers]
 # Vanilla method names

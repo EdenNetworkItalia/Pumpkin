@@ -81,6 +81,7 @@ fn process_loaded_chunk(chunk: Arc<crate::chunk::ChunkData>, level: &Level) -> C
             proto.stage = StagedChunkEnum::Features;
             Chunk::Proto(Box::new(proto))
         } else {
+            ProtoChunk::register_saved_starts(&chunk, &level.world_gen.load());
             Chunk::Level(chunk)
         }
     } else {

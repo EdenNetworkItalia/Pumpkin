@@ -1,6 +1,7 @@
 mod block_tuning_and_invert;
 mod commands_and_gamemode;
 mod embedded_stop;
+mod join_message;
 mod login_and_movement;
 mod loot_tables;
 mod player_actions;
@@ -25,6 +26,8 @@ pub async fn run_bot_tests(
 
     let (mut bot1, bot2) =
         login_and_movement::run_login_and_movement_tests(server, addr, summary_lines).await?;
+
+    join_message::run_join_message_test(server, addr, &mut bot1, summary_lines).await?;
 
     commands_and_gamemode::run_commands_and_gamemode_tests(
         server,

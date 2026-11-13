@@ -910,6 +910,18 @@ impl Server {
         }
     }
 
+    /// Sends a system message to every player on the server except `except`.
+    ///
+    /// Vanilla `PlayerList.placeNewPlayer` broadcasts the join message before it adds the joiner to
+    /// `players`, so the joiner never receives it.
+    pub fn broadcast_system_message_except(&self, message: &TextComponent, except: &Player) {
+        self.for_each_player(|player| {
+            if player.gameprofile.id != except.gameprofile.id {
+                player.send_system_message(message);
+            }
+        });
+    }
+
     pub fn broadcast_message(
         self: &Arc<Self>,
         message: &TextComponent,

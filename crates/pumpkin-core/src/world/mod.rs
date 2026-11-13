@@ -3521,7 +3521,7 @@ impl World {
         server.plugin_manager.fire(server, &mut event).await;
 
         if !event.cancelled {
-            self.broadcast_system_message(&event.join_message, false);
+            server.broadcast_system_message_except(&event.join_message, &player);
             info!("{}", event.join_message.to_pretty_console());
         }
         server.notify_update_if_op(&player);
@@ -4053,7 +4053,7 @@ impl World {
         server.plugin_manager.fire(server, &mut event).await;
 
         if !event.cancelled {
-            self.broadcast_system_message(&event.join_message, false);
+            server.broadcast_system_message_except(&event.join_message, player);
             // TODO: Switch to structured logging, e.g. info!(player = %name, "connected")
             info!("{}", event.join_message.to_pretty_console());
         }

@@ -149,6 +149,8 @@ pub struct ProtoChunk {
     pub flat_motion_blocking_no_leaves_height_map: [i16; CHUNK_AREA],
     pub(crate) structure_starts: FxHashMap<StructureKeys, StructureInstance>,
     pub(crate) structure_references: Vec<(StructureKeys, Arc<Mutex<StructurePiecesCollector>>)>,
+    /// The `structures` tag this chunk was loaded with, written back unchanged on save.
+    saved_structures: NbtCompound,
 
     height: u16,
     bottom_y: i8,
@@ -264,6 +266,7 @@ impl ProtoChunk {
             flat_motion_blocking_no_leaves_height_map: default_heightmap,
             structure_starts: FxHashMap::default(),
             structure_references: Vec::new(),
+            saved_structures: NbtCompound::new(),
             height,
             bottom_y,
             generation_height,
@@ -400,6 +403,12 @@ impl ProtoChunk {
 
         let saved_stage = StagedChunkEnum::from(chunk_data.status);
         proto_chunk.stage = saved_stage;
+        // Before the structure stages the tag holds nothing yet: vanilla writes it empty.
+        if saved_stage >= StagedChunkEnum::StructureStart {
+            proto_chunk
+                .saved_structures
+                .clone_from(&chunk_data.structures);
+        }
         if let super::generator::WorldGenerator::Noise(generator) = generator
             && (StagedChunkEnum::StructureStart..StagedChunkEnum::Features).contains(&saved_stage)
         {
@@ -414,6 +423,12 @@ impl ProtoChunk {
             proto_chunk.stage = saved_stage;
         }
         proto_chunk
+    }
+
+    /// The vanilla `structures` tag to save with this chunk.
+    #[must_use]
+    pub fn structure_data(&self) -> NbtCompound {
+        self.saved_structures.clone()
     }
 
     #[inline]

@@ -289,3 +289,50 @@ fn heightmap_roundtrip_through_chunk_data_resume() {
         "resumed chunk surface differs from uninterrupted generation (stone-trail bug)"
     );
 }
+
+/// A chunk saved past the structure stages keeps the `structures` tag it was loaded with when
+/// it resumes and is saved again. Before them, vanilla writes the tag empty.
+#[test]
+fn structures_tag_survives_proto_chunk_resume() {
+    use crate::chunk::ChunkData;
+    use pumpkin_config::lighting::LightingEngineConfig;
+    use pumpkin_data::chunk::ChunkStatus;
+    use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
+
+    let world_gen = get_world_gen(
+        Seed(4242),
+        Dimension::OVERWORLD,
+        false,
+        Vec::new(),
+        String::new(),
+    );
+    let mut references = NbtCompound::new();
+    references.put("minecraft:mineshaft", NbtTag::LongArray(vec![0]));
+    let mut structures = NbtCompound::new();
+    structures.put_compound("starts", NbtCompound::new());
+    structures.put_compound("References", references);
+
+    for (status, kept) in [
+        (ChunkStatus::Empty, false),
+        (ChunkStatus::StructureStarts, true),
+        (ChunkStatus::Features, true),
+    ] {
+        let chunk_data = ChunkData {
+            status,
+            structures: structures.clone(),
+            ..ChunkData::empty(0, 0)
+        };
+        let resumed = ProtoChunk::from_chunk_data(&chunk_data, &world_gen);
+        let mut staged = Chunk::Proto(Box::new(resumed));
+        staged.upgrade_to_level_chunk(&Dimension::OVERWORLD, &LightingEngineConfig::Default);
+        let Chunk::Level(saved) = staged else {
+            unreachable!()
+        };
+        let expected = if kept {
+            structures.clone()
+        } else {
+            NbtCompound::new()
+        };
+        assert_eq!(saved.structures, expected, "{status:?}");
+    }
+}

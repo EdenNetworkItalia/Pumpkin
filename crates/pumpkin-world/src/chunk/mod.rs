@@ -82,6 +82,9 @@ pub struct ChunkData {
     pub dirty: AtomicBool,
     pub inhabited_time: AtomicU64,
     pub custom_data: std::sync::Mutex<NbtCompound>,
+    /// The vanilla `structures` tag: the structure starts this chunk owns and the references
+    /// to the starts whose bounding box reaches into it. Empty when the chunk has none.
+    pub structures: NbtCompound,
 }
 
 pub struct ChunkEntityData {
@@ -645,6 +648,7 @@ impl ChunkData {
             dirty: std::sync::atomic::AtomicBool::new(false),
             inhabited_time: std::sync::atomic::AtomicU64::new(0),
             custom_data: std::sync::Mutex::new(NbtCompound::new()),
+            structures: NbtCompound::new(),
         }
     }
 

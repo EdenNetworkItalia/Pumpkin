@@ -212,6 +212,36 @@ where
     })
 }
 
+/// Reads a length-prefixed unnamed compound of the pump format, or an empty one if `present` is
+/// false.
+fn read_pump_compound(
+    buf: &mut &[u8],
+    present: bool,
+    what: &str,
+) -> Result<NbtCompound, ChunkParsingError> {
+    if !present {
+        return Ok(NbtCompound::default());
+    }
+    if buf.remaining() < 4 {
+        return Err(ChunkParsingError::ErrorDeserializingChunk(format!(
+            "Unexpected EOF reading {what} length"
+        )));
+    }
+    let len = buf.get_u32() as usize;
+    if buf.remaining() < len {
+        return Err(ChunkParsingError::ErrorDeserializingChunk(format!(
+            "Unexpected EOF reading {what} payload"
+        )));
+    }
+    let mut cursor = std::io::Cursor::new(&buf[..len]);
+    let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(&mut cursor);
+    let nbt = pumpkin_nbt::Nbt::read_unnamed(&mut reader)
+        .map_err(|e| ChunkParsingError::ErrorDeserializingChunk(e.to_string()))?
+        .root_tag;
+    buf.advance(len);
+    Ok(nbt)
+}
+
 impl ChunkData {
     #[allow(clippy::too_many_lines)]
     pub fn internal_from_bytes(
@@ -471,6 +501,10 @@ impl ChunkData {
             .or_else(|| root_tag.get_compound("BukkitValues"))
             .cloned()
             .unwrap_or_default();
+        let structures = root_tag
+            .get_compound("structures")
+            .cloned()
+            .unwrap_or_default();
 
         Ok(Self {
             section,
@@ -488,6 +522,7 @@ impl ChunkData {
             blending_data: None,
             inhabited_time: AtomicU64::new(root_tag.get_long("InhabitedTime").unwrap_or(0) as u64),
             custom_data: std::sync::Mutex::new(custom_data),
+            structures,
         })
     }
 
@@ -691,6 +726,9 @@ impl ChunkData {
         if !custom_data.is_empty() {
             root_compound.put_compound("PumpkinCustomData", custom_data.clone());
         }
+        if !self.structures.is_empty() {
+            root_compound.put_compound("structures", self.structures.clone());
+        }
 
         let nbt = pumpkin_nbt::Nbt::from(root_compound);
         nbt.write()
@@ -758,6 +796,10 @@ impl ChunkData {
         }
         if has_custom {
             flags |= 1 << 4;
+        }
+        let has_structures = !self.structures.is_empty();
+        if has_structures {
+            flags |= 1 << 5;
         }
 
         let status_u8 = match self.status {
@@ -854,6 +896,13 @@ impl ChunkData {
 
         if has_custom {
             let bytes = pumpkin_nbt::Nbt::new(String::new(), custom_data.clone()).write_unnamed();
+            out.put_u32(bytes.len() as u32);
+            out.extend_from_slice(&bytes);
+        }
+
+        if has_structures {
+            let bytes =
+                pumpkin_nbt::Nbt::new(String::new(), self.structures.clone()).write_unnamed();
             out.put_u32(bytes.len() as u32);
             out.extend_from_slice(&bytes);
         }
@@ -1107,28 +1156,8 @@ impl ChunkData {
             }
         }
 
-        let custom_data = if (flags & (1 << 4)) != 0 {
-            if buf.remaining() < 4 {
-                return Err(ChunkParsingError::ErrorDeserializingChunk(
-                    "Unexpected EOF reading custom data length".into(),
-                ));
-            }
-            let len = buf.get_u32() as usize;
-            if buf.remaining() < len {
-                return Err(ChunkParsingError::ErrorDeserializingChunk(
-                    "Unexpected EOF reading custom data payload".into(),
-                ));
-            }
-            let mut cursor = std::io::Cursor::new(&buf[..len]);
-            let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(&mut cursor);
-            let nbt = pumpkin_nbt::Nbt::read_unnamed(&mut reader)
-                .map_err(|e| ChunkParsingError::ErrorDeserializingChunk(e.to_string()))?
-                .root_tag;
-            buf.advance(len);
-            nbt
-        } else {
-            NbtCompound::default()
-        };
+        let custom_data = read_pump_compound(&mut buf, (flags & (1 << 4)) != 0, "custom data")?;
+        let structures = read_pump_compound(&mut buf, (flags & (1 << 5)) != 0, "structures")?;
 
         Ok(Self {
             section,
@@ -1145,6 +1174,7 @@ impl ChunkData {
             blending_data: None,
             inhabited_time: AtomicU64::new(inhabited_time),
             custom_data: std::sync::Mutex::new(custom_data),
+            structures,
         })
     }
 
@@ -1634,6 +1664,66 @@ mod tests {
             panic!("chunk without yPos and without biomes must fail");
         };
         assert!(format!("{error:?}").contains("Missing yPos"));
+    }
+
+    /// The `structures` tag of a vanilla chunk: a village start owned by the chunk and a
+    /// reference to it.
+    fn vanilla_structures_tag() -> NbtCompound {
+        let mut piece = NbtCompound::new();
+        piece.put_string("id", "minecraft:jigsaw".to_string());
+        piece.put("BB", NbtTag::IntArray(vec![0, 63, 0, 8, 70, 8]));
+        piece.put_int("O", 0);
+        piece.put_int("GD", 0);
+        let mut start = NbtCompound::new();
+        start.put_string("id", "minecraft:village_plains".to_string());
+        start.put_int("ChunkX", 0);
+        start.put_int("ChunkZ", 0);
+        start.put_int("references", 0);
+        start.put_list("Children", vec![NbtTag::Compound(piece)]);
+        let mut starts = NbtCompound::new();
+        starts.put_compound("minecraft:village_plains", start);
+        let mut references = NbtCompound::new();
+        references.put("minecraft:village_plains", NbtTag::LongArray(vec![0]));
+        let mut structures = NbtCompound::new();
+        structures.put_compound("starts", starts);
+        structures.put_compound("References", references);
+        structures
+    }
+
+    fn saved_structures_tag(bytes: &[u8]) -> Option<NbtCompound> {
+        let nbt = pumpkin_nbt::Nbt::read(&mut pumpkin_nbt::deserializer::NbtReadHelperJava::new(
+            &mut std::io::Cursor::new(bytes),
+        ))
+        .expect("saved chunk parses");
+        nbt.root_tag.get_compound("structures").cloned()
+    }
+
+    #[test]
+    fn vanilla_structures_tag_survives_a_save() {
+        use crate::chunk::ChunkData;
+        use pumpkin_util::math::vector2::Vector2;
+
+        let mut nbt = test_chunk(vec![test_section(-4, "minecraft:stone", true)]);
+        nbt.root_tag.put_int("yPos", -4);
+        nbt.root_tag
+            .put_compound("structures", vanilla_structures_tag());
+        let chunk = ChunkData::from_bytes(&nbt.write(), Vector2::new(0, 0)).expect("chunk parses");
+
+        let saved = chunk.internal_to_bytes();
+        assert_eq!(
+            saved_structures_tag(&saved),
+            Some(vanilla_structures_tag()),
+            "the Anvil save keeps the tag"
+        );
+
+        let pump =
+            ChunkData::internal_from_bytes(&chunk.internal_to_pump_bytes(), Vector2::new(0, 0))
+                .expect("pump chunk parses");
+        assert_eq!(
+            saved_structures_tag(&pump.internal_to_bytes()),
+            Some(vanilla_structures_tag()),
+            "the pump format keeps the tag"
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@ use pumpkin_util::resource_location::{FromResourceLocation, ResourceLocation, To
 use rustc_hash::FxHashMap;
 
 use crate::{
+    block::BlockStateCodec,
     chunk::{
         ChunkEntityData, ChunkReadingError, ChunkSerializingError,
         format::anvil::{SingleChunkDataSerializer, WORLD_DATA_VERSION},
@@ -582,27 +583,7 @@ impl ChunkData {
             let palette_tags: Vec<NbtTag> = block_states_nbt
                 .palette
                 .iter()
-                .map(|&id| {
-                    let block = Block::from_state_id(id);
-                    let mut comp = NbtCompound::new();
-                    let name = if block.name.starts_with("minecraft:") {
-                        block.name.to_string()
-                    } else {
-                        format!("minecraft:{}", block.name)
-                    };
-                    comp.put_string("Name", name);
-                    if let Some(props) = block.properties(id) {
-                        let prop_vec = props.to_props();
-                        if !prop_vec.is_empty() {
-                            let mut props_comp = NbtCompound::new();
-                            for p in prop_vec {
-                                props_comp.put_string(p.key_str(), p.value_str().to_string());
-                            }
-                            comp.put_compound("Properties", props_comp);
-                        }
-                    }
-                    NbtTag::Compound(comp)
-                })
+                .map(|&id| NbtTag::Compound(BlockStateCodec::state_to_nbt(id)))
                 .collect();
             bs_comp.put_list("palette", palette_tags);
             section_comp.put_compound("block_states", bs_comp);
@@ -1665,6 +1646,88 @@ mod tests {
             ])
             .to_state_id(&Block::REPEATER);
         assert_eq!(result[1], repeater_state);
+    }
+
+    fn repeater_state() -> BlockStateId {
+        Block::REPEATER
+            .from_properties(&[
+                pumpkin_data::Property::Facing(pumpkin_data::block_properties::Facing::East),
+                pumpkin_data::Property::Delay(2),
+                pumpkin_data::Property::Locked(false),
+                pumpkin_data::Property::Powered(false),
+            ])
+            .to_state_id(&Block::REPEATER)
+    }
+
+    #[test]
+    fn chunk_palette_writes_the_26_3_block_state_keys() {
+        // 26.3 `StateHolder.codec` dispatches on `id` and reads `properties`.
+        let chunk = ChunkData::empty(0, 0);
+        chunk.set_block_absolute_y(1, 70, 2, repeater_state());
+
+        let bytes = chunk.to_bytes().unwrap();
+        let mut cursor = std::io::Cursor::new(&bytes[..]);
+        let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(&mut cursor);
+        let root = pumpkin_nbt::Nbt::read(&mut reader).unwrap().root_tag;
+
+        let sections = root.get_list("sections").unwrap();
+        let section = sections
+            .iter()
+            .filter_map(NbtTag::extract_compound)
+            .find(|section| section.get_byte("Y") == Some(4))
+            .unwrap();
+        let palette = section
+            .get_compound("block_states")
+            .and_then(|block_states| block_states.get_list("palette"))
+            .unwrap();
+        let repeater = palette
+            .iter()
+            .filter_map(NbtTag::extract_compound)
+            .find(|entry| entry.get_string("id") == Some("minecraft:repeater"))
+            .expect("the palette has a repeater entry under `id`");
+        let properties = repeater.get_compound("properties").unwrap();
+        assert_eq!(properties.get_string("facing"), Some("east"));
+        assert_eq!(properties.get_string("delay"), Some("2"));
+        assert_eq!(properties.get_string("locked"), Some("false"));
+        assert_eq!(properties.get_string("powered"), Some("false"));
+
+        for entry in palette.iter().filter_map(NbtTag::extract_compound) {
+            assert!(entry.get_string("Name").is_none());
+            assert!(entry.get_compound("Properties").is_none());
+        }
+    }
+
+    #[test]
+    fn chunk_palette_reads_both_key_shapes_and_bare_names() {
+        // 26.3 writes `id` and `properties`, 26.2 and older wrote `Name` and `Properties`,
+        // and a palette entry can also be a bare block name.
+        let mut new_entry = NbtCompound::new();
+        new_entry.put_string("id", "minecraft:repeater".to_string());
+        let mut new_properties = NbtCompound::new();
+        new_properties.put_string("facing", "east".to_string());
+        new_properties.put_string("delay", "2".to_string());
+        new_properties.put_string("locked", "false".to_string());
+        new_properties.put_string("powered", "false".to_string());
+        new_entry.put_compound("properties", new_properties.clone());
+
+        let mut old_entry = NbtCompound::new();
+        old_entry.put_string("Name", "minecraft:repeater".to_string());
+        old_entry.put_compound("Properties", new_properties);
+
+        let palette = NbtTag::List(vec![
+            NbtTag::Compound(new_entry),
+            NbtTag::Compound(old_entry),
+            NbtTag::String("minecraft:stone".to_string().into()),
+        ]);
+        let result = extract_u16_array(&palette).expect("should extract palette");
+        assert_eq!(
+            &*result,
+            &[
+                repeater_state(),
+                repeater_state(),
+                Block::STONE.default_state.id
+            ]
+        );
     }
 
     #[test]

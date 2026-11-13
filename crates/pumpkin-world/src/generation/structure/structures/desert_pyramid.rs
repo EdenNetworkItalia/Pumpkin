@@ -19,6 +19,7 @@ use crate::{
         positions::chunk_pos::{start_block_x, start_block_z},
         structure::{
             piece::StructurePieceType,
+            shiftable_piece::{DEFAULT_H_POS, add_scattered_save_data},
             structures::{
                 StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
                 StructurePiecesCollector, StructurePosition,
@@ -53,7 +54,7 @@ impl StructureGenerator for DesertPyramidGenerator {
         let mut collector = StructurePiecesCollector::default();
         collector.add_piece(Box::new(DesertPyramidPiece {
             piece,
-            height_adjusted: false,
+            height_position: DEFAULT_H_POS,
             has_placed_chest: [false; 4],
         }));
 
@@ -66,11 +67,25 @@ impl StructureGenerator for DesertPyramidGenerator {
 
 pub struct DesertPyramidPiece {
     piece: StructurePiece,
-    height_adjusted: bool,
+    /// Vanilla `ScatteredFeaturePiece.heightPosition`: negative until the height is adjusted.
+    height_position: i32,
     has_placed_chest: [bool; 4],
 }
 
 impl DesertPyramidPiece {
+    /// Vanilla `DesertPyramidPiece(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            height_position: tag.get_int("HPos").unwrap_or(0),
+            has_placed_chest: std::array::from_fn(|index| {
+                tag.get_bool(&format!("hasPlacedChest{index}"))
+                    .unwrap_or(false)
+            }),
+        }
+    }
+
     fn sandstone_stairs(facing: HorizontalFacing) -> &'static BlockState {
         let mut props = WhiteWoolStairsLikeProperties::default(&Block::SANDSTONE_STAIRS);
         props.facing = facing;
@@ -78,7 +93,7 @@ impl DesertPyramidPiece {
     }
 
     fn adjust_height(&mut self, chunk: &ProtoChunk, random: &mut RandomGenerator) -> bool {
-        if self.height_adjusted {
+        if self.height_position >= 0 {
             return true;
         }
 
@@ -97,9 +112,9 @@ impl DesertPyramidPiece {
             return false;
         }
 
+        self.height_position = lowest;
         let shift_y = lowest - self.piece.bounding_box.min.y + ground_offset;
         self.piece.bounding_box.move_pos(0, shift_y, 0);
-        self.height_adjusted = true;
         true
     }
 
@@ -521,6 +536,14 @@ impl DesertPyramidPiece {
 impl StructurePieceBase for DesertPyramidPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        add_scattered_save_data(tag, WIDTH, HEIGHT, DEPTH, self.height_position);
+        for (index, placed) in self.has_placed_chest.iter().enumerate() {
+            tag.put_bool(&format!("hasPlacedChest{index}"), *placed);
+        }
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece

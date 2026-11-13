@@ -364,3 +364,95 @@ fn reloaded_start_chunk_keeps_the_cached_start() {
         assert_eq!(position.get_bounding_box(), adjusted_box, "{status:?}");
     }
 }
+
+/// A start tag with one piece of `piece_id` and the given fields of its own.
+fn one_piece_start(
+    structure: &str,
+    piece_id: &str,
+    ints: &[(&str, i32)],
+    bools: &[(&str, bool)],
+) -> NbtCompound {
+    let mut piece = NbtCompound::new();
+    piece.put_string("id", piece_id.to_string());
+    piece.put("BB", NbtTag::IntArray(vec![0, 70, 0, 20, 84, 20]));
+    piece.put_int("O", 3);
+    piece.put_int("GD", 0);
+    for &(name, value) in ints {
+        piece.put_int(name, value);
+    }
+    for &(name, value) in bools {
+        piece.put_bool(name, value);
+    }
+    let mut start = NbtCompound::new();
+    start.put_string("id", structure.to_string());
+    start.put_int("ChunkX", 0);
+    start.put_int("ChunkZ", 0);
+    start.put_int("references", 0);
+    start.put_list("Children", vec![NbtTag::Compound(piece)]);
+    start
+}
+
+/// Scattered feature pieces load back the fields that vanilla `ScatteredFeaturePiece` and its
+/// subclasses write, and save them again unchanged.
+#[test]
+fn scattered_feature_starts_load_back() {
+    let scattered = |width, height, depth| {
+        [
+            ("Width", width),
+            ("Height", height),
+            ("Depth", depth),
+            ("HPos", 68),
+        ]
+    };
+    for (structure, tag) in [
+        (
+            StructureKeys::DesertPyramid,
+            one_piece_start(
+                "minecraft:desert_pyramid",
+                "minecraft:tedp",
+                &scattered(21, 15, 21),
+                &[
+                    ("hasPlacedChest0", true),
+                    ("hasPlacedChest1", false),
+                    ("hasPlacedChest2", true),
+                    ("hasPlacedChest3", false),
+                ],
+            ),
+        ),
+        (
+            StructureKeys::JunglePyramid,
+            one_piece_start(
+                "minecraft:jungle_pyramid",
+                "minecraft:tejp",
+                &scattered(12, 10, 15),
+                &[
+                    ("placedMainChest", true),
+                    ("placedHiddenChest", false),
+                    ("placedTrap1", true),
+                    ("placedTrap2", false),
+                ],
+            ),
+        ),
+        (
+            StructureKeys::SwampHut,
+            one_piece_start(
+                "minecraft:swamp_hut",
+                "minecraft:tesh",
+                &scattered(7, 7, 9),
+                &[("Witch", true), ("Cat", false)],
+            ),
+        ),
+    ] {
+        let loaded = start::load_start(structure, &tag, 0, 63).expect("the start loads");
+        let collector = loaded
+            .collector
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved_again = start::create_tag(
+            structure,
+            pumpkin_util::math::vector2::Vector2::new(0, 0),
+            &collector,
+        );
+        assert_eq!(saved_again, Some(tag), "{structure:?}");
+    }
+}

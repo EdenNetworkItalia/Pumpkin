@@ -22,7 +22,8 @@ use super::{
     piece::StructurePieceType,
     structures::{
         StructurePiece, StructurePieceBase, StructurePiecesCollector, StructurePosition,
-        buried_treasure::BuriedTreasurePiece, ocean_monument,
+        buried_treasure::BuriedTreasurePiece, desert_pyramid::DesertPyramidPiece,
+        jungle_temple::JungleTemplePiece, ocean_monument, swamp_hut::SwampHutPiece,
     },
 };
 
@@ -298,6 +299,9 @@ fn load_piece(tag: &NbtCompound) -> Option<Box<dyn StructurePieceBase>> {
     let piece = StructurePiece::from_tag(piece_type, tag)?;
     Some(match piece_type {
         StructurePieceType::BuriedTreasure => Box::new(BuriedTreasurePiece::from_tag(piece)),
+        StructurePieceType::DesertTemple => Box::new(DesertPyramidPiece::from_tag(piece, tag)),
+        StructurePieceType::JungleTemple => Box::new(JungleTemplePiece::from_tag(piece, tag)),
+        StructurePieceType::SwampHut => Box::new(SwampHutPiece::from_tag(piece, tag)),
         _ => return None,
     })
 }

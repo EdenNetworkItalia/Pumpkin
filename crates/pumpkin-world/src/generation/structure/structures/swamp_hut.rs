@@ -20,7 +20,7 @@ use crate::{
             piece::StructurePieceType,
             shiftable_piece::ShiftableStructurePiece,
             structures::{
-                StructureGenerator, StructureGeneratorContext, StructurePieceBase,
+                StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
                 StructurePiecesCollector, StructurePosition, WorldPortalExt,
             },
         },
@@ -72,6 +72,16 @@ pub struct SwampHutPiece {
 }
 
 impl SwampHutPiece {
+    /// Vanilla `SwampHutPiece(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        Self {
+            shiftable_structure_piece: ShiftableStructurePiece::from_tag(piece, tag),
+            spawned_witch: tag.get_bool("Witch").unwrap_or(false),
+            spawned_cat: tag.get_bool("Cat").unwrap_or(false),
+        }
+    }
+
     fn spruce_stairs(facing: HorizontalFacing, shape: StairsShape) -> &'static BlockState {
         let mut props = WhiteWoolStairsLikeProperties::default(&Block::SPRUCE_STAIRS);
         props.facing = facing;
@@ -126,6 +136,13 @@ impl SwampHutPiece {
 impl StructurePieceBase for SwampHutPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.shiftable_structure_piece.add_additional_save_data(tag);
+        tag.put_bool("Witch", self.spawned_witch);
+        tag.put_bool("Cat", self.spawned_cat);
+        true
     }
 
     #[allow(clippy::too_many_lines)]

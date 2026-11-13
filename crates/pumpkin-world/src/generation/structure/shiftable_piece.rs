@@ -1,3 +1,4 @@
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     HeightMap,
     math::{block_box::BlockBox, vector3::Axis},
@@ -15,6 +16,21 @@ pub struct ShiftableStructurePiece {
     h_pos: i32,
     width: i32,
     height: i32,
+    depth: i32,
+}
+
+/// Vanilla `ScatteredFeaturePiece.addAdditionalSaveData`.
+pub fn add_scattered_save_data(
+    tag: &mut NbtCompound,
+    width: i32,
+    height: i32,
+    depth: i32,
+    height_position: i32,
+) {
+    tag.put_int("Width", width);
+    tag.put_int("Height", height);
+    tag.put_int("Depth", depth);
+    tag.put_int("HPos", height_position);
 }
 
 impl ShiftableStructurePiece {
@@ -39,7 +55,24 @@ impl ShiftableStructurePiece {
             h_pos: DEFAULT_H_POS,
             width,
             height,
+            depth,
         }
+    }
+
+    /// Vanilla `ScatteredFeaturePiece(StructurePieceType, CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            h_pos: tag.get_int("HPos").unwrap_or(0),
+            width: tag.get_int("Width").unwrap_or(0),
+            height: tag.get_int("Height").unwrap_or(0),
+            depth: tag.get_int("Depth").unwrap_or(0),
+        }
+    }
+
+    pub fn add_additional_save_data(&self, tag: &mut NbtCompound) {
+        add_scattered_save_data(tag, self.width, self.height, self.depth, self.h_pos);
     }
 
     pub fn adjust_to_average_height(&mut self, chunk: &ProtoChunk) -> bool {

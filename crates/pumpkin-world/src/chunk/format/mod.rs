@@ -212,6 +212,13 @@ where
     })
 }
 
+// The chunk palette writer writes the 26.2 keys `Name` and `Properties`. 26.3 renamed them to
+// `id` and `properties` (data version 5006).
+const _: () = assert!(
+    WORLD_DATA_VERSION < 5006,
+    "WORLD_DATA_VERSION reached 26.3: write `id` and `properties` in the palette writer"
+);
+
 impl ChunkData {
     #[allow(clippy::too_many_lines)]
     pub fn internal_from_bytes(
@@ -1686,5 +1693,41 @@ mod tests {
                 .unwrap()
                 .id
         );
+    }
+
+    #[test]
+    fn chunk_and_entity_writers_declare_the_26_2_data_version() {
+        use std::sync::atomic::AtomicBool;
+
+        // The writers produce the 26.2 shape (`Name`/`Properties`). Vanilla 26.3 only runs its
+        // data fixers on data below 5006, so the version has to stay that of 26.2.
+        const DATA_VERSION_26_2: i32 = 4903;
+
+        let data_version = |bytes: &[u8]| {
+            let mut cursor = std::io::Cursor::new(bytes);
+            let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(&mut cursor);
+            let named = bytes.starts_with(&[0x0a, 0x00, 0x00]);
+            let nbt = if named {
+                pumpkin_nbt::Nbt::read(&mut reader)
+            } else {
+                pumpkin_nbt::Nbt::read_unnamed(&mut reader)
+            }
+            .unwrap();
+            nbt.root_tag.get_int("DataVersion")
+        };
+
+        let chunk = ChunkData::empty(0, 0).to_bytes().unwrap();
+        assert_eq!(data_version(&chunk), Some(DATA_VERSION_26_2));
+
+        let entities = ChunkEntityData {
+            x: 0,
+            z: 0,
+            data: std::sync::Mutex::new(vec![]),
+            live: AtomicBool::new(false),
+            dirty: AtomicBool::new(false),
+        }
+        .to_bytes()
+        .unwrap();
+        assert_eq!(data_version(&entities), Some(DATA_VERSION_26_2));
     }
 }

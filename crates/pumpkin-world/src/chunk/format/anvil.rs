@@ -27,8 +27,9 @@ pub const CHUNK_COUNT: usize = REGION_SIZE * REGION_SIZE;
 /// The number of bytes in a sector (4 KiB)
 const SECTOR_BYTES: usize = 4096;
 
-// 26.3
-pub const WORLD_DATA_VERSION: i32 = 5023;
+/// The data version of the shape that the chunk and entity writers produce: 26.2.
+/// Vanilla runs its data fixers from it on load.
+pub const WORLD_DATA_VERSION: i32 = 4903;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

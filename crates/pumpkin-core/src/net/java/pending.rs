@@ -306,8 +306,7 @@ impl PendingConnection {
                 .await;
             }
             ConnectionState::Config => {
-                self.send_packet_now(&CConfigDisconnect::new(&reason.get_text()))
-                    .await;
+                self.send_packet_now(&CConfigDisconnect::new(&reason)).await;
             }
             ConnectionState::Play => {
                 self.send_packet_now(&CPlayDisconnect::new(&reason)).await;

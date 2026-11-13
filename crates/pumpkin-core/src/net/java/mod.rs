@@ -580,8 +580,7 @@ impl JavaClient {
                 self.serialize_packet(&packet).ok()
             }
             ConnectionState::Config => {
-                let reason_text = reason.clone().get_text();
-                let packet = CConfigDisconnect::new(&reason_text);
+                let packet = CConfigDisconnect::new(reason);
                 self.serialize_packet(&packet).ok()
             }
             ConnectionState::Play => {

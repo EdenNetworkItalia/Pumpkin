@@ -85,7 +85,7 @@ fn spawn_wither(world: &Arc<World>, pattern: &WitherPattern) {
             BlockFlags::NOTIFY_LISTENERS,
         );
         world.sync_world_event(
-            WorldEvent::ParticlesDestroyBlock,
+            WorldEvent::ParticlesAndSoundDestroyBlock,
             pos,
             i32::from(state_id.as_u16()),
         );

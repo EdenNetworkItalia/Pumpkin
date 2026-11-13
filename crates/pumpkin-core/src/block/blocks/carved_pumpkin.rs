@@ -76,7 +76,7 @@ fn spawn_golem(world: &Arc<World>, pattern: &GolemPattern) {
             BlockFlags::NOTIFY_LISTENERS,
         );
         world.sync_world_event(
-            WorldEvent::ParticlesDestroyBlock,
+            WorldEvent::ParticlesAndSoundDestroyBlock,
             pos,
             i32::from(state_id.as_u16()),
         );

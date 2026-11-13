@@ -1,3 +1,4 @@
+mod block_break_effect;
 mod block_tuning_and_invert;
 mod commands_and_gamemode;
 mod embedded_stop;
@@ -23,7 +24,7 @@ pub async fn run_bot_tests(
 ) -> Result<(), String> {
     status_ping::run_bot_status_ping_test(addr, summary_lines).await?;
 
-    let (mut bot1, bot2) =
+    let (mut bot1, mut bot2) =
         login_and_movement::run_login_and_movement_tests(server, addr, summary_lines).await?;
 
     commands_and_gamemode::run_commands_and_gamemode_tests(
@@ -37,6 +38,9 @@ pub async fn run_bot_tests(
     loot_tables::run_loot_table_tests(server, &mut bot1, summary_lines).await?;
 
     world_interaction::run_world_interaction_tests(server, &mut bot1, summary_lines).await?;
+
+    block_break_effect::run_block_break_effect_test(server, &mut bot1, &mut bot2, summary_lines)
+        .await?;
 
     sheep_shearing::run_sheep_shearing_test(server, summary_lines)?;
 

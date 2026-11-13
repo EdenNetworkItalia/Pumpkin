@@ -1123,6 +1123,7 @@ pub fn deserialize_java_serverbound_packet(
                         main_hand: p.main_hand.0.try_into().ok()?,
                         text_filtering: p.text_filtering.try_into().ok()?,
                         server_listing: p.server_listing.try_into().ok()?,
+                        particle_status: p.particle_status.0.try_into().ok()?,
                     },
                 ))
             }
@@ -1258,6 +1259,7 @@ pub fn deserialize_java_serverbound_packet(
                         main_hand: p.main_hand.0.try_into().ok()?,
                         text_filtering: p.text_filtering.try_into().ok()?,
                         server_listing: p.server_listing.try_into().ok()?,
+                        particle_status: p.particle_status.0.try_into().ok()?,
                     },
                 ))
             }

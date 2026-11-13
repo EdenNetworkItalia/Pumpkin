@@ -21,6 +21,8 @@ interface java-packets {
     text-filtering: bool,
     /// Whether the player should appear in the server's online player list
     server-listing: bool,
+    /// Particle level the client renders (0: All, 1: Decreased, 2: Minimal)
+    particle-status: s32,
   }
   /// Response to a `CCookieRequest` from the server during the configuration phase
   /// 
@@ -191,6 +193,7 @@ interface java-packets {
     main-hand: s32,
     text-filtering: bool,
     server-listing: bool,
+    particle-status: s32,
   }
   record s-close-container {
     window-id: s32,

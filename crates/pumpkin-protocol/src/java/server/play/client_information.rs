@@ -18,6 +18,7 @@ pub struct SClientInformationPlay<'a> {
     pub main_hand: VarInt,
     pub text_filtering: bool,
     pub server_listing: bool,
+    pub particle_status: VarInt,
 }
 
 impl<'a> ServerPacket<'a> for SClientInformationPlay<'a> {
@@ -42,6 +43,11 @@ impl<'a> ServerPacket<'a> for SClientInformationPlay<'a> {
         } else {
             true
         };
+        let particle_status = if version >= &JavaMinecraftVersion::V_1_21_2 {
+            bytebuf.get_var_int()?
+        } else {
+            VarInt(0)
+        };
 
         Ok(Self {
             locale,
@@ -52,6 +58,7 @@ impl<'a> ServerPacket<'a> for SClientInformationPlay<'a> {
             main_hand,
             text_filtering,
             server_listing,
+            particle_status,
         })
     }
 }
@@ -77,6 +84,44 @@ impl crate::ClientPacket for SClientInformationPlay<'_> {
         if version >= &JavaMinecraftVersion::V_1_18 {
             write.write_bool(self.server_listing)?;
         }
+        if version >= &JavaMinecraftVersion::V_1_21_2 {
+            write.write_var_int(&self.particle_status)?;
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ClientPacket;
+    use crate::java::server::config::SClientInformationConfig;
+
+    /// `ClientInformation.write` output for `en_us`, view distance 12, chat `SYSTEM`, no chat
+    /// colors, skin parts 0x5a, left hand, text filtering on, no listing, particles `MINIMAL`.
+    /// The configuration and play packets share this layout.
+    const VANILLA: [u8; 14] = [
+        0x05, b'e', b'n', b'_', b'u', b's', 0x0c, 0x01, 0x00, 0x5a, 0x00, 0x01, 0x00, 0x02,
+    ];
+
+    #[test]
+    fn reads_vanilla_client_information() {
+        let version = JavaMinecraftVersion::V_26_3;
+
+        let mut bytes = &VANILLA[..];
+        let play = SClientInformationPlay::read(&mut bytes, &version).unwrap();
+        assert!(bytes.is_empty(), "{} bytes left unread", bytes.len());
+        assert_eq!(play.particle_status, VarInt(2));
+        let mut written = Vec::new();
+        play.write_packet_data(&mut written, &version).unwrap();
+        assert_eq!(written, VANILLA);
+
+        let mut bytes = &VANILLA[..];
+        let config = SClientInformationConfig::read(&mut bytes, &version).unwrap();
+        assert!(bytes.is_empty(), "{} bytes left unread", bytes.len());
+        assert_eq!(config.particle_status, VarInt(2));
+        let mut written = Vec::new();
+        config.write_packet_data(&mut written, &version).unwrap();
+        assert_eq!(written, VANILLA);
     }
 }

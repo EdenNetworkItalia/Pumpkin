@@ -47,6 +47,8 @@ struct PieceDump {
     bounding_box: BoxDump,
     orientation: i32,
     gen_depth: i32,
+    /// The fields of a jigsaw piece, as the vanilla codecs write them in JSON.
+    piece_data: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -77,6 +79,9 @@ fn vanilla_start_tag(start: &StartDump) -> NbtCompound {
             );
             tag.put_int("O", piece.orientation);
             tag.put_int("GD", piece.gen_depth);
+            if let Some(data) = &piece.piece_data {
+                add_jigsaw_fields(&mut tag, data);
+            }
             NbtTag::Compound(tag)
         })
         .collect();
@@ -87,6 +92,74 @@ fn vanilla_start_tag(start: &StartDump) -> NbtCompound {
     tag.put_int("references", start.references);
     tag.put_list("Children", children);
     tag
+}
+
+/// The NBT that vanilla `NbtOps` gives for a value that the vanilla codecs write as `json`.
+fn json_to_nbt(json: &serde_json::Value) -> NbtTag {
+    match json {
+        serde_json::Value::String(string) => NbtTag::String(string.as_str().into()),
+        serde_json::Value::Number(number) => NbtTag::Int(number.as_i64().expect("integer") as i32),
+        serde_json::Value::Array(values) => NbtTag::List(values.iter().map(json_to_nbt).collect()),
+        serde_json::Value::Object(fields) => {
+            let mut compound = NbtCompound::new();
+            for (name, value) in fields {
+                compound.put(name, json_to_nbt(value));
+            }
+            NbtTag::Compound(compound)
+        }
+        other => panic!("no NBT for {other}"),
+    }
+}
+
+/// The fields of vanilla `PoolElementStructurePiece.addAdditionalSaveData` from the dump.
+fn add_jigsaw_fields(tag: &mut NbtCompound, data: &serde_json::Value) {
+    let position = data["position"].as_array().expect("position");
+    for (name, value) in ["PosX", "PosY", "PosZ"].into_iter().zip(position) {
+        tag.put(name, json_to_nbt(value));
+    }
+    for name in [
+        "ground_level_delta",
+        "pool_element",
+        "rotation",
+        "junctions",
+    ] {
+        tag.put(name, json_to_nbt(&data[name]));
+    }
+    if data["liquid_settings"] != "apply_waterlogging" {
+        tag.put("liquid_settings", json_to_nbt(&data["liquid_settings"]));
+    }
+}
+
+/// Asserts that two start tags are equal, naming the first piece and fields that differ.
+fn assert_same_start(written: &NbtCompound, expected: &NbtCompound, label: &str) {
+    let pieces = |start: &NbtCompound| {
+        start
+            .get_list("Children")
+            .unwrap_or_default()
+            .iter()
+            .filter_map(NbtTag::extract_compound)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let (written_pieces, expected_pieces) = (pieces(written), pieces(expected));
+    for (index, (written, expected)) in written_pieces.iter().zip(&expected_pieces).enumerate() {
+        let differing: Vec<_> = written
+            .child_tags
+            .keys()
+            .chain(expected.child_tags.keys())
+            .filter(|name| written.get(name) != expected.get(name))
+            .collect();
+        assert!(
+            differing.is_empty(),
+            "{label}: piece {index} differs in {differing:?}: {written:?} != {expected:?}"
+        );
+    }
+    assert_eq!(
+        written_pieces.len(),
+        expected_pieces.len(),
+        "{label}: piece count"
+    );
+    assert_eq!(written, expected, "{label}");
 }
 
 /// The `structures` tag of the Anvil save of the chunk at `chunk_x`, `chunk_z` after the
@@ -667,4 +740,84 @@ fn dumped_starts_load_back() {
             "the dump has no {family} start"
         );
     }
+}
+
+/// The jigsaw starts of the vanilla dump are written with the fields of every piece that the
+/// vanilla codecs write, and load back.
+#[test]
+fn jigsaw_starts_match_vanilla_dump() {
+    let dump = dump();
+    let mut checked = 0;
+    for (dimension, dimension_dump) in [
+        (Dimension::OVERWORLD, dump.overworld),
+        (Dimension::THE_NETHER, dump.the_nether),
+    ] {
+        let world_gen = get_world_gen(Seed(0), dimension, false, Vec::new(), String::new());
+        let WorldGenerator::Noise(generator) = &*world_gen else {
+            unreachable!()
+        };
+        let starts = dimension_dump
+            .chunks
+            .into_iter()
+            .flat_map(|chunk| chunk.starts)
+            .filter(|start| start.pieces[0].piece_type == "minecraft:jigsaw");
+        for start in starts {
+            let mut proto = ProtoChunk::new(start.chunk_x, start.chunk_z, &world_gen);
+            proto.step_to_biomes(generator);
+            proto.set_structure_starts(generator);
+            let structures = proto.structure_data();
+            let written = structures
+                .get_compound("starts")
+                .and_then(|starts| starts.get_compound(&start.structure))
+                .expect("the start is written");
+            assert_same_start(written, &vanilla_start_tag(&start), &start.structure);
+
+            let key = StructureKeys::from_name(&start.structure).expect("known structure");
+            let loaded = start::load_start(key, written, 0, generator.settings.sea_level)
+                .expect("the start loads");
+            let collector = loaded
+                .collector
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let chunk = pumpkin_util::math::vector2::Vector2::new(start.chunk_x, start.chunk_z);
+            let saved_again = start::create_tag(key, chunk, &collector).expect("the start saves");
+            // Vanilla takes a loaded jigsaw piece's box from its element, without the growth
+            // of the village expansion hack.
+            assert_same_start(
+                &without_piece_fields(&saved_again, &["BB"]),
+                &without_piece_fields(written, &["BB"]),
+                &format!("{} loads back", start.structure),
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 10);
+}
+
+/// The village start that the vanilla 26.3 server saved for chunk 36 -126 of this seed.
+#[test]
+fn village_start_matches_vanilla_save() {
+    let expected = pumpkin_nbt::nbt_compress::read_gzip_compound_tag(Cursor::new(include_bytes!(
+        "../../../../../assets/tests/village_plains_start_36_-126.nbt"
+    )))
+    .expect("fixture parses");
+    let world_gen = get_world_gen(
+        Seed(1_782_124_772_053_846_960),
+        Dimension::OVERWORLD,
+        false,
+        Vec::new(),
+        String::new(),
+    );
+    let WorldGenerator::Noise(generator) = &*world_gen else {
+        unreachable!()
+    };
+    let mut proto = ProtoChunk::new(36, -126, &world_gen);
+    proto.step_to_biomes(generator);
+    proto.set_structure_starts(generator);
+    let structures = proto.structure_data();
+    let written = structures
+        .get_compound("starts")
+        .and_then(|starts| starts.get_compound("minecraft:village_plains"))
+        .expect("the village start is written");
+    assert_same_start(written, &expected, "village");
 }

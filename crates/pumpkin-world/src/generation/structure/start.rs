@@ -24,9 +24,10 @@ use super::{
     structures::{
         StructurePiece, StructurePieceBase, StructurePiecesCollector, StructurePosition,
         buried_treasure::BuriedTreasurePiece, desert_pyramid::DesertPyramidPiece,
-        end_city::EndCityTemplatePiece, igloo::IglooPiece, jungle_temple::JungleTemplePiece,
-        mansion, nether_fossil::NetherFossilPiece, ocean_monument, ocean_ruin::OceanRuinPiece,
-        ruined_portal::RuinedPortalPiece, shipwreck::ShipwreckPiece, swamp_hut::SwampHutPiece,
+        end_city::EndCityTemplatePiece, igloo::IglooPiece, jigsaw::PoolElementStructurePiece,
+        jungle_temple::JungleTemplePiece, mansion, nether_fossil::NetherFossilPiece,
+        ocean_monument, ocean_ruin::OceanRuinPiece, ruined_portal::RuinedPortalPiece,
+        shipwreck::ShipwreckPiece, swamp_hut::SwampHutPiece,
     },
 };
 
@@ -318,6 +319,7 @@ fn load_piece(tag: &NbtCompound) -> Option<Box<dyn StructurePieceBase>> {
             Box::new(mansion::MansionTemplatePiece::from_tag(piece, tag)?)
         }
         StructurePieceType::RuinedPortal => Box::new(RuinedPortalPiece::from_tag(piece, tag)?),
+        StructurePieceType::Jigsaw => Box::new(PoolElementStructurePiece::from_tag(piece, tag)?),
         _ => return None,
     })
 }

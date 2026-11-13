@@ -462,10 +462,11 @@ impl Placer {
                                 };
 
                                 let mut target_piece = Box::new(PoolElementStructurePiece {
+                                    // Vanilla builds every jigsaw piece with gen depth 0.
                                     piece: StructurePiece::new(
                                         StructurePieceType::Jigsaw,
                                         target_bb,
-                                        depth as u32 + 1,
+                                        0,
                                     ),
                                     element: target_element,
                                     pos: target_box_position,

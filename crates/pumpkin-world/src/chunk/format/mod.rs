@@ -212,6 +212,25 @@ where
     })
 }
 
+/// The schema version of `SignsOpFlagFix` in `DataFixers`.
+const SIGNS_OP_FLAG_FIX_VERSION: i32 = 5002;
+
+/// Applies `SignsOpFlagFix`. Data older than 5002 has no `allow_op_features` flag, and vanilla
+/// sets it on every sign and hanging sign, so signs made before the flag keep their commands.
+fn fix_signs_op_flag(data_version: i32, block_entities: &mut FxHashMap<BlockPos, NbtCompound>) {
+    if data_version >= SIGNS_OP_FLAG_FIX_VERSION {
+        return;
+    }
+    for nbt in block_entities.values_mut() {
+        if matches!(
+            nbt.get_string("id"),
+            Some("minecraft:sign" | "minecraft:hanging_sign")
+        ) {
+            nbt.put_bool("allow_op_features", true);
+        }
+    }
+}
+
 impl ChunkData {
     #[allow(clippy::too_many_lines)]
     pub fn internal_from_bytes(
@@ -447,6 +466,11 @@ impl ChunkData {
                 }
             }
         }
+        // Vanilla reads a missing version as the oldest one.
+        fix_signs_op_flag(
+            root_tag.get_int("DataVersion").unwrap_or(-1),
+            &mut block_entities,
+        );
 
         let light_correct = root_tag.get_bool("isLightOn").unwrap_or(false);
 
@@ -1665,6 +1689,48 @@ mod tests {
             ])
             .to_state_id(&Block::REPEATER);
         assert_eq!(result[1], repeater_state);
+    }
+
+    #[test]
+    fn signs_read_from_data_older_than_5002_get_the_op_flag() {
+        use crate::chunk::ChunkData;
+        use pumpkin_util::math::vector2::Vector2;
+
+        // `SignsOpFlagFix` is registered at schema 5002 in `DataFixers`: it sets
+        // `allow_op_features` on every sign and hanging sign of older data.
+        let pos = BlockPos::new(1, -60, 2);
+        let flag_after_load = |data_version: Option<i32>, id: &str| {
+            let mut sign = NbtCompound::new();
+            sign.put_string("id", id.to_string());
+            sign.put_int("x", pos.0.x);
+            sign.put_int("y", pos.0.y);
+            sign.put_int("z", pos.0.z);
+
+            let mut nbt = test_chunk(vec![test_section(-4, "minecraft:stone", true)]);
+            match data_version {
+                Some(version) => nbt.root_tag.put_int("DataVersion", version),
+                None => {
+                    nbt.root_tag.child_tags.remove("DataVersion");
+                }
+            }
+            nbt.root_tag
+                .put_list("block_entities", vec![NbtTag::Compound(sign)]);
+
+            let chunk = ChunkData::from_bytes(&nbt.write(), Vector2::new(0, 0)).unwrap();
+            let block_entities = chunk.pending_block_entities.lock().unwrap();
+            block_entities[&pos].get_bool("allow_op_features")
+        };
+
+        for id in ["minecraft:sign", "minecraft:hanging_sign"] {
+            assert_eq!(flag_after_load(Some(5001), id), Some(true));
+            assert_eq!(flag_after_load(Some(5002), id), None);
+            assert_eq!(flag_after_load(Some(WORLD_DATA_VERSION), id), None);
+            // 26.2.
+            assert_eq!(flag_after_load(Some(4903), id), Some(true));
+            // Vanilla reads a missing version as the oldest one.
+            assert_eq!(flag_after_load(None, id), Some(true));
+        }
+        assert_eq!(flag_after_load(Some(4903), "minecraft:chest"), None);
     }
 
     #[test]

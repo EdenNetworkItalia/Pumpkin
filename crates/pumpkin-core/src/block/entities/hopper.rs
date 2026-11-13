@@ -281,21 +281,19 @@ impl HopperBlockEntity {
                             .get_item_stack()
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        (stack.is_empty(), stack.item.registry_key.to_string())
+                        (stack.is_empty(), stack.item.registry_key)
                     };
                     if !is_empty {
-                        let mut pickup_event =
-                            crate::plugin::api::events::inventory::inventory_pickup_item::InventoryPickupItemEvent::new(
-                                self.position,
-                                item_entity.get_entity().entity_id,
-                                registry_key,
-                            );
-                        if let Some(server) = world.server.upgrade() {
-                            server
-                                .plugin_manager
-                                .fire_blocking(&server, &mut pickup_event);
-                        }
-                        if pickup_event.cancelled {
+                        if let Some(server) = world.server.upgrade()
+                            && let Some(pickup_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                                crate::plugin::api::events::inventory::inventory_pickup_item::InventoryPickupItemEvent::new(
+                                    self.position,
+                                    item_entity.get_entity().entity_id,
+                                    registry_key.to_string(),
+                                )
+                            })
+                            && pickup_event.cancelled
+                        {
                             continue;
                         }
                         let (backup, one_item, is_empty) = {
@@ -403,18 +401,17 @@ impl HopperBlockEntity {
                 if item.is_empty() {
                     continue;
                 }
-                let mut move_event = crate::plugin::api::events::inventory::inventory_move_item::InventoryMoveItemEvent::new(
-                    self.position,
-                    target_pos,
-                    item.item.registry_key.to_string(),
-                    1,
-                );
-                if let Some(server) = world.server.upgrade() {
-                    server
-                        .plugin_manager
-                        .fire_blocking(&server, &mut move_event);
-                }
-                if move_event.cancelled {
+                if let Some(server) = world.server.upgrade()
+                    && let Some(move_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                        crate::plugin::api::events::inventory::inventory_move_item::InventoryMoveItemEvent::new(
+                            self.position,
+                            target_pos,
+                            item.item.registry_key.to_string(),
+                            1,
+                        )
+                    })
+                    && move_event.cancelled
+                {
                     continue;
                 }
                 // Vanilla `HopperBlockEntity.ejectItems`: actually remove the item from the

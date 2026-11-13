@@ -1212,10 +1212,7 @@ impl PluginManager {
 
     #[must_use]
     pub fn has_handlers<E: Payload + 'static>(&self) -> bool {
-        self.handlers
-            .load()
-            .get(E::get_name_static())
-            .is_some_and(|handlers| !handlers.is_empty())
+        handlers_of(&self.handlers.load(), E::get_name_static()).is_some()
     }
 
     /// Fire an event to all registered handlers
@@ -1224,44 +1221,9 @@ impl PluginManager {
         server: &Arc<Server>,
         event: &mut E,
     ) {
-        self.fire_dyn(server, E::get_name_static(), event).await;
-    }
-
-    async fn fire_dyn(
-        &self,
-        server: &Arc<Server>,
-        event_name: &'static str,
-        event: &mut (dyn Payload + Send + Sync),
-    ) {
         let handlers_map = self.handlers.load();
-        if handlers_map.is_empty() {
-            return;
-        }
-
-        let Some(handlers) = handlers_map.get(event_name) else {
-            return;
-        };
-
-        if handlers.is_empty() {
-            return;
-        }
-
-        // Process blocking handlers first
-        for handler in handlers {
-            if handler.is_blocking() {
-                handler.handle_blocking_dyn(server, event).await;
-            }
-        }
-
-        // Run non-blocking handlers concurrently
-        let non_blocking: Vec<_> = handlers
-            .iter()
-            .filter(|h| !h.is_blocking())
-            .map(|h| h.handle_dyn(server, event))
-            .collect();
-
-        if !non_blocking.is_empty() {
-            futures::future::join_all(non_blocking).await;
+        if let Some(handlers) = handlers_of(&handlers_map, E::get_name_static()) {
+            dispatch(handlers, server, event).await;
         }
     }
 
@@ -1272,39 +1234,38 @@ impl PluginManager {
         server: &Arc<Server>,
         event: &mut E,
     ) {
-        self.fire_blocking_dyn(server, E::get_name_static(), event);
+        let handlers_map = self.handlers.load();
+        if let Some(handlers) = handlers_of(&handlers_map, E::get_name_static()) {
+            dispatch_blocking(handlers, server, event);
+        }
     }
 
-    fn fire_blocking_dyn(
-        &self,
-        server: &Arc<Server>,
-        event_name: &'static str,
-        event: &mut (dyn Payload + Send + Sync),
-    ) {
+    /// Builds the event with `make` only when a handler is registered for it, fires it and
+    /// returns it with the changes of the handlers. Returns `None` without calling `make` when
+    /// no handler is registered, so a fire site pays nothing to build an event nobody reads.
+    pub async fn fire_with<E, F>(&self, server: &Arc<Server>, make: F) -> Option<E>
+    where
+        E: Payload + Send + Sync + 'static,
+        F: FnOnce() -> E,
+    {
         let handlers_map = self.handlers.load();
-        if handlers_map.is_empty() {
-            return;
-        }
+        let handlers = handlers_of(&handlers_map, E::get_name_static())?;
+        let mut event = make();
+        dispatch(handlers, server, &mut event).await;
+        Some(event)
+    }
 
-        let Some(handlers) = handlers_map.get(event_name) else {
-            return;
-        };
-
-        if handlers.is_empty() {
-            return;
-        }
-
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(|| {
-                server
-                    .runtime
-                    .block_on(self.fire_dyn(server, event_name, event));
-            });
-        } else {
-            server
-                .runtime
-                .block_on(self.fire_dyn(server, event_name, event));
-        }
+    /// The synchronous form of [`PluginManager::fire_with`], which blocks like [`PluginManager::fire_blocking`].
+    pub fn fire_blocking_with<E, F>(&self, server: &Arc<Server>, make: F) -> Option<E>
+    where
+        E: Payload + Send + Sync + 'static,
+        F: FnOnce() -> E,
+    {
+        let handlers_map = self.handlers.load();
+        let handlers = handlers_of(&handlers_map, E::get_name_static())?;
+        let mut event = make();
+        dispatch_blocking(handlers, server, &mut event);
+        Some(event)
     }
 
     #[expect(clippy::result_unit_err)]
@@ -1334,6 +1295,58 @@ impl PluginManager {
         } else {
             Err(())
         }
+    }
+}
+
+/// The handlers of `event_name`, or `None` when it has none.
+fn handlers_of<'a>(
+    handlers_map: &'a HandlerMap,
+    event_name: &str,
+) -> Option<&'a [Arc<dyn DynEventHandler>]> {
+    if handlers_map.is_empty() {
+        return None;
+    }
+    handlers_map
+        .get(event_name)
+        .filter(|handlers| !handlers.is_empty())
+        .map(Vec::as_slice)
+}
+
+async fn dispatch(
+    handlers: &[Arc<dyn DynEventHandler>],
+    server: &Arc<Server>,
+    event: &mut (dyn Payload + Send + Sync),
+) {
+    // Process blocking handlers first
+    for handler in handlers {
+        if handler.is_blocking() {
+            handler.handle_blocking_dyn(server, event).await;
+        }
+    }
+
+    // Run non-blocking handlers concurrently
+    let non_blocking: Vec<_> = handlers
+        .iter()
+        .filter(|h| !h.is_blocking())
+        .map(|h| h.handle_dyn(server, event))
+        .collect();
+
+    if !non_blocking.is_empty() {
+        futures::future::join_all(non_blocking).await;
+    }
+}
+
+fn dispatch_blocking(
+    handlers: &[Arc<dyn DynEventHandler>],
+    server: &Arc<Server>,
+    event: &mut (dyn Payload + Send + Sync),
+) {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::block_in_place(|| {
+            server.runtime.block_on(dispatch(handlers, server, event));
+        });
+    } else {
+        server.runtime.block_on(dispatch(handlers, server, event));
     }
 }
 

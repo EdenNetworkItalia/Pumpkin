@@ -61,11 +61,10 @@ impl Player {
         let Some(player) = self.world().get_player_by_uuid(self.gameprofile.id) else {
             return;
         };
-        let mut input_event = PlayerInputEvent::new(player.clone(), format!("{input:b}"));
-        server
-            .plugin_manager
-            .fire_blocking(server, &mut input_event);
-        if input_event.cancelled {
+        if let Some(input_event) = server.plugin_manager.fire_blocking_with(server, || {
+            PlayerInputEvent::new(player.clone(), format!("{input:b}"))
+        }) && input_event.cancelled
+        {
             return;
         }
 

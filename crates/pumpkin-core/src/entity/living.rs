@@ -843,19 +843,17 @@ impl LivingEntity {
 
     /// Picks up an item entity or XP orb.
     pub fn pickup(&self, item: &Entity, stack_amount: u32) -> bool {
-        let mut pickup_event =
-            crate::plugin::api::events::entity::entity_pickup_item::EntityPickupItemEvent::new(
-                self.entity.entity_id,
-                item.entity_type.id.to_string(),
-                stack_amount as u8,
-            );
-        if let Some(server) = self.entity.world.load().server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut pickup_event);
-            if pickup_event.cancelled {
-                return false;
-            }
+        if let Some(server) = self.entity.world.load().server.upgrade()
+            && let Some(pickup_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                crate::plugin::api::events::entity::entity_pickup_item::EntityPickupItemEvent::new(
+                    self.entity.entity_id,
+                    item.entity_type.id.to_string(),
+                    stack_amount as u8,
+                )
+            })
+            && pickup_event.cancelled
+        {
+            return false;
         }
 
         let chunk_pos = self.entity.chunk_pos.load();
@@ -1321,19 +1319,17 @@ impl LivingEntity {
             return;
         }
 
-        let mut effect_event =
-            crate::plugin::api::events::entity::entity_potion_effect::EntityPotionEffectEvent::new(
-                self.entity.entity_id,
-                effect.effect_type.translation_key.to_string(),
-                effect.duration,
-                effect.amplifier,
-            );
-        if let Some(server) = self.entity.world.load().server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut effect_event);
-        }
-        if effect_event.cancelled {
+        if let Some(server) = self.entity.world.load().server.upgrade()
+            && let Some(effect_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                crate::plugin::api::events::entity::entity_potion_effect::EntityPotionEffectEvent::new(
+                    self.entity.entity_id,
+                    effect.effect_type.translation_key.to_string(),
+                    effect.duration,
+                    effect.amplifier,
+                )
+            })
+            && effect_event.cancelled
+        {
             return;
         }
 
@@ -3646,41 +3642,39 @@ impl LivingEntity {
         // Like vanilla, negative damage is still a hit, just of zero.
         amount = amount.max(0.0);
 
-        let mut damage_event =
-            crate::plugin::api::events::entity::entity_damage::EntityDamageEvent::new(
-                self.entity.entity_id,
-                damage_type,
-                amount,
-            );
-        if let Some(server) = self.entity.world.load().server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut damage_event);
-        }
-        if damage_event.cancelled {
-            return false;
-        }
-        amount = damage_event.damage;
-
-        if let Some(damager) = source.or(cause) {
-            let mut by_entity_event =
-                crate::plugin::api::events::entity::entity_damage_by_entity::EntityDamageByEntityEvent {
-                    entity_id: self.entity.entity_id,
-                    damager_id: damager.get_entity().entity_id,
-                    damage: amount,
-                    cause: format!("{damage_type:?}"),
-                    cancelled: false,
-                };
-            if let Some(server) = self.entity.world.load().server.upgrade() {
-                server
-                    .plugin_manager
-                    .fire_blocking(&server, &mut by_entity_event);
-            }
-            if by_entity_event.cancelled {
+        if let Some(server) = self.entity.world.load().server.upgrade()
+            && let Some(damage_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                crate::plugin::api::events::entity::entity_damage::EntityDamageEvent::new(
+                    self.entity.entity_id,
+                    damage_type,
+                    amount,
+                )
+            })
+        {
+            if damage_event.cancelled {
                 return false;
             }
-            amount = by_entity_event.damage;
-        } else if position.is_some()
+            amount = damage_event.damage;
+        }
+
+        if let Some(damager) = source.or(cause) {
+            if let Some(server) = self.entity.world.load().server.upgrade()
+                && let Some(by_entity_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                    crate::plugin::api::events::entity::entity_damage_by_entity::EntityDamageByEntityEvent {
+                        entity_id: self.entity.entity_id,
+                        damager_id: damager.get_entity().entity_id,
+                        damage: amount,
+                        cause: format!("{damage_type:?}"),
+                        cancelled: false,
+                    }
+                })
+            {
+                if by_entity_event.cancelled {
+                    return false;
+                }
+                amount = by_entity_event.damage;
+            }
+        } else if (position.is_some()
             || matches!(
                 damage_type,
                 DamageType::CACTUS
@@ -3688,28 +3682,25 @@ impl LivingEntity {
                     | DamageType::CAMPFIRE
                     | DamageType::HOT_FLOOR
                     | DamageType::STALAGMITE
-            )
-        {
-            let damager_pos = position.map(|p| {
-                BlockPos(Vector3::new(
-                    p.x.floor() as i32,
-                    p.y.floor() as i32,
-                    p.z.floor() as i32,
-                ))
-            });
-            let mut by_block_event =
+            ))
+            && let Some(server) = self.entity.world.load().server.upgrade()
+            && let Some(by_block_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                let damager_pos = position.map(|p| {
+                    BlockPos(Vector3::new(
+                        p.x.floor() as i32,
+                        p.y.floor() as i32,
+                        p.z.floor() as i32,
+                    ))
+                });
                 crate::plugin::api::events::entity::entity_damage_by_block::EntityDamageByBlockEvent {
                     entity_id: self.entity.entity_id,
                     damager_pos,
                     damage: amount,
                     cause: format!("{damage_type:?}"),
                     cancelled: false,
-                };
-            if let Some(server) = self.entity.world.load().server.upgrade() {
-                server
-                    .plugin_manager
-                    .fire_blocking(&server, &mut by_block_event);
-            }
+                }
+            })
+        {
             if by_block_event.cancelled {
                 return false;
             }

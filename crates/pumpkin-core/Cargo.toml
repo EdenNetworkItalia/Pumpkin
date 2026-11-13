@@ -110,8 +110,13 @@ xxhash-rust.workspace = true
 libc = { workspace = true }
 
 [dev-dependencies]
+criterion.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+
+[[bench]]
+name = "event_dispatch"
+harness = false
 
 [lints]
 workspace = true

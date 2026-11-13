@@ -1948,14 +1948,14 @@ impl Player {
             .server
             .upgrade()
             .zip(world.get_player_by_uuid(self.gameprofile.id));
-        let amount = if let Some((server, player)) = &player_context {
-            let mut event =
+        let amount = if let Some((server, player)) = &player_context
+            && let Some(event) = server.plugin_manager.fire_blocking_with(server, || {
                 crate::plugin::api::events::player::player_item_damage::PlayerItemDamageEvent::new(
                     player.clone(),
                     original_item.registry_key.to_string(),
                     amount,
-                );
-            server.plugin_manager.fire_blocking(server, &mut event);
+                )
+            }) {
             if event.cancelled {
                 return DamageResult::Untouched;
             }
@@ -1981,12 +1981,12 @@ impl Player {
         if result == DamageResult::Broken
             && let Some((server, player)) = player_context
         {
-            let mut event =
+            server.plugin_manager.fire_blocking_with(&server, || {
                 crate::plugin::api::events::player::player_item_break::PlayerItemBreakEvent::new(
                     player,
                     original_item.registry_key.to_string(),
-                );
-            server.plugin_manager.fire_blocking(&server, &mut event);
+                )
+            });
         }
         result
     }
@@ -3969,9 +3969,9 @@ impl Player {
     }
 
     pub fn increment_stat(&self, category: statistics::StatisticCategory, stat: i32, amount: i32) {
-        let final_amount = if let Some(player_arc) =
-            self.world().get_player_by_uuid(self.gameprofile.id)
-            && let Some(server) = self.world().server.upgrade()
+        let final_amount = if let Some(server) = self.world().server.upgrade()
+            && server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_statistic_increment::PlayerStatisticIncrementEvent>()
+            && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
         {
             let mut event = crate::plugin::api::events::player::player_statistic_increment::PlayerStatisticIncrementEvent {
                 player: player_arc,
@@ -6357,10 +6357,11 @@ impl Player {
 
     /// Add experience points to the player.
     pub fn add_experience_points(self: &Arc<Self>, mut added_points: i32) {
-        let server = self.world().server.upgrade();
-        if let Some(server) = server {
-            let mut event = PlayerExpChangeEvent::new(self.clone(), added_points);
-            server.plugin_manager.fire_blocking(&server, &mut event);
+        if let Some(server) = self.world().server.upgrade()
+            && let Some(event) = server.plugin_manager.fire_blocking_with(&server, || {
+                PlayerExpChangeEvent::new(self.clone(), added_points)
+            })
+        {
             added_points = event.amount;
         }
 
@@ -7197,14 +7198,17 @@ impl Player {
             .permission_manager
             .has_permission(&self.gameprofile.id, node, level);
 
-        let mut event = PlayerPermissionCheckEvent::new(self.clone(), node.to_string(), result);
-        let server_arc = self.world().server.upgrade();
-        if let Some(server_arc) = server_arc {
-            server_arc
-                .plugin_manager
-                .fire_blocking(&server_arc, &mut event);
-        }
-        event.result
+        self.world()
+            .server
+            .upgrade()
+            .and_then(|server_arc| {
+                server_arc
+                    .plugin_manager
+                    .fire_blocking_with(&server_arc, || {
+                        PlayerPermissionCheckEvent::new(self.clone(), node.to_string(), result)
+                    })
+            })
+            .map_or(result, |event| event.result)
     }
 
     pub fn is_creative(&self) -> bool {

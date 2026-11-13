@@ -5353,16 +5353,17 @@ impl World {
     ///
     /// [`EntitySpawnEvent`]: crate::plugin::api::events::entity::entity_spawn::EntitySpawnEvent
     pub fn spawn_entity(self: &Arc<Self>, entity: Arc<dyn EntityBase>) -> bool {
-        let mut event = crate::plugin::api::events::entity::entity_spawn::EntitySpawnEvent::new(
-            entity.get_entity().entity_id,
-            entity.get_entity().entity_type.id.to_string(),
-            entity.get_entity().pos.load(),
-            self.clone(),
-        );
-        if let Some(server) = self.server.upgrade() {
-            server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+        if let Some(server) = self.server.upgrade()
+            && let Some(event) = server.plugin_manager.fire_blocking_with(&server, || {
+                crate::plugin::api::events::entity::entity_spawn::EntitySpawnEvent::new(
+                    entity.get_entity().entity_id,
+                    entity.get_entity().entity_type.id.to_string(),
+                    entity.get_entity().pos.load(),
+                    self.clone(),
+                )
+            })
+            && event.cancelled
+        {
             return false;
         }
 
@@ -5380,19 +5381,20 @@ impl World {
         reason: crate::plugin::api::events::entity::creature_spawn::CreatureSpawnReason,
         player: Option<Arc<Player>>,
     ) -> bool {
-        let base = entity.get_entity();
-        let mut event = crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent::new(
-            base.entity_id,
-            base.entity_type.resource_name.to_string(),
-            base.pos.load(),
-            self.clone(),
-            reason,
-            player,
-        );
-        if let Some(server) = self.server.upgrade() {
-            server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+        if let Some(server) = self.server.upgrade()
+            && let Some(event) = server.plugin_manager.fire_blocking_with(&server, || {
+                let base = entity.get_entity();
+                crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent::new(
+                    base.entity_id,
+                    base.entity_type.resource_name.to_string(),
+                    base.pos.load(),
+                    self.clone(),
+                    reason,
+                    player,
+                )
+            })
+            && event.cancelled
+        {
             return false;
         }
         self.spawn_entity(entity)
@@ -6257,17 +6259,16 @@ impl World {
         };
 
         let entity = Entity::new(self.clone(), spawn_pos, &EntityType::ITEM);
-        let mut item_event = crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent::new(
-            entity.entity_id,
-            spawn_pos,
-            stack.item.registry_key.to_string(),
-        );
-        if let Some(server) = self.server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut item_event);
-        }
-        if item_event.cancelled {
+        if let Some(server) = self.server.upgrade()
+            && let Some(item_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent::new(
+                    entity.entity_id,
+                    spawn_pos,
+                    stack.item.registry_key.to_string(),
+                )
+            })
+            && item_event.cancelled
+        {
             return;
         }
 
@@ -6341,17 +6342,16 @@ impl World {
         };
 
         let entity = Entity::new(self.clone(), spawn_pos, &EntityType::ITEM);
-        let mut item_event = crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent::new(
-            entity.entity_id,
-            spawn_pos,
-            stack.item.registry_key.to_string(),
-        );
-        if let Some(server) = self.server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut item_event);
-        }
-        if item_event.cancelled {
+        if let Some(server) = self.server.upgrade()
+            && let Some(item_event) = server.plugin_manager.fire_blocking_with(&server, || {
+                crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent::new(
+                    entity.entity_id,
+                    spawn_pos,
+                    stack.item.registry_key.to_string(),
+                )
+            })
+            && item_event.cancelled
+        {
             return;
         }
 
@@ -7617,7 +7617,11 @@ impl World {
         Self::broadcast_bedrock_grouped(be_packet, bedrock_recipients.into_iter());
     }
 
-    pub fn emit_game_event(&self, event_key: impl Into<String>, position: Vector3<f64>) {
+    pub fn emit_game_event(
+        &self,
+        event_key: impl Into<String> + AsRef<str>,
+        position: Vector3<f64>,
+    ) {
         self.emit_game_event_with_context(
             event_key,
             position,
@@ -7629,22 +7633,30 @@ impl World {
 
     pub fn emit_game_event_with_context(
         &self,
-        event_key: impl Into<String>,
+        event_key: impl Into<String> + AsRef<str>,
         position: Vector3<f64>,
         context: &game_event::GameEventContext<'_>,
     ) {
-        let mut event = crate::plugin::api::events::world::generic_game::GenericGameEvent::new(
-            event_key.into(),
-            position,
-        );
-        if let Some(server) = self.server.upgrade() {
+        if let Some(server) = self.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::world::generic_game::GenericGameEvent>()
+        {
+            let mut event = crate::plugin::api::events::world::generic_game::GenericGameEvent::new(
+                event_key.into(),
+                position,
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
-            return;
-        }
-        if let Some(kind) = pumpkin_data::game_event::GameEvent::from_name(&event.event_key) {
-            self.post_game_event(kind, event.position, context);
+            if event.cancelled {
+                return;
+            }
+            if let Some(kind) = pumpkin_data::game_event::GameEvent::from_name(&event.event_key) {
+                self.post_game_event(kind, event.position, context);
+            }
+        } else if let Some(kind) =
+            pumpkin_data::game_event::GameEvent::from_name(event_key.as_ref())
+        {
+            self.post_game_event(kind, position, context);
         }
     }
 

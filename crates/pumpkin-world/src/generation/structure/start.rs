@@ -23,11 +23,20 @@ use super::{
     piece::StructurePieceType,
     structures::{
         StructurePiece, StructurePieceBase, StructurePiecesCollector, StructurePosition,
-        buried_treasure::BuriedTreasurePiece, desert_pyramid::DesertPyramidPiece,
-        end_city::EndCityTemplatePiece, igloo::IglooPiece, jigsaw::PoolElementStructurePiece,
-        jungle_temple::JungleTemplePiece, mansion, nether_fossil::NetherFossilPiece,
-        ocean_monument, ocean_ruin::OceanRuinPiece, ruined_portal::RuinedPortalPiece,
-        shipwreck::ShipwreckPiece, swamp_hut::SwampHutPiece,
+        buried_treasure::BuriedTreasurePiece,
+        desert_pyramid::DesertPyramidPiece,
+        end_city::EndCityTemplatePiece,
+        igloo::IglooPiece,
+        jigsaw::PoolElementStructurePiece,
+        jungle_temple::JungleTemplePiece,
+        mansion,
+        mineshaft::{MineShaftCorridor, MineShaftCrossing, MineShaftRoom, MineShaftStairs},
+        nether_fossil::NetherFossilPiece,
+        ocean_monument,
+        ocean_ruin::OceanRuinPiece,
+        ruined_portal::RuinedPortalPiece,
+        shipwreck::ShipwreckPiece,
+        swamp_hut::SwampHutPiece,
     },
 };
 
@@ -233,23 +242,34 @@ pub fn create_tag(
     Some(tag)
 }
 
+/// Vanilla `BoundingBox.CODEC`.
+#[must_use]
+pub fn box_tag(bounding_box: &BlockBox) -> NbtTag {
+    NbtTag::IntArray(vec![
+        bounding_box.min.x,
+        bounding_box.min.y,
+        bounding_box.min.z,
+        bounding_box.max.x,
+        bounding_box.max.y,
+        bounding_box.max.z,
+    ])
+}
+
+/// The box that vanilla `BoundingBox.CODEC` writes as `tag`.
+#[must_use]
+pub fn box_from_tag(tag: &NbtTag) -> Option<BlockBox> {
+    let &[min_x, min_y, min_z, max_x, max_y, max_z] = tag.extract_int_array()? else {
+        return None;
+    };
+    Some(BlockBox::new(min_x, min_y, min_z, max_x, max_y, max_z))
+}
+
 /// Vanilla `StructurePiece.createTag`.
 fn create_piece_tag(piece: &dyn StructurePieceBase) -> Option<NbtCompound> {
     let base = piece.get_structure_piece();
-    let bounding_box = piece.bounding_box();
     let mut tag = NbtCompound::new();
     tag.put_string("id", base.r#type.id().to_string());
-    tag.put(
-        "BB",
-        NbtTag::IntArray(vec![
-            bounding_box.min.x,
-            bounding_box.min.y,
-            bounding_box.min.z,
-            bounding_box.max.x,
-            bounding_box.max.y,
-            bounding_box.max.z,
-        ]),
-    );
+    tag.put("BB", box_tag(&piece.bounding_box()));
     tag.put_int("O", data_2d_value(base.facing));
     tag.put_int("GD", base.chain_length as i32);
     piece.add_additional_save_data(&mut tag).then_some(tag)
@@ -320,6 +340,10 @@ fn load_piece(tag: &NbtCompound) -> Option<Box<dyn StructurePieceBase>> {
         }
         StructurePieceType::RuinedPortal => Box::new(RuinedPortalPiece::from_tag(piece, tag)?),
         StructurePieceType::Jigsaw => Box::new(PoolElementStructurePiece::from_tag(piece, tag)?),
+        StructurePieceType::MineshaftRoom => Box::new(MineShaftRoom::from_tag(piece, tag)),
+        StructurePieceType::MineshaftCorridor => Box::new(MineShaftCorridor::from_tag(piece, tag)),
+        StructurePieceType::MineshaftCrossing => Box::new(MineShaftCrossing::from_tag(piece, tag)),
+        StructurePieceType::MineshaftStairs => Box::new(MineShaftStairs::from_tag(piece, tag)),
         _ => return None,
     })
 }

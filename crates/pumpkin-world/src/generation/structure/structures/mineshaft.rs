@@ -18,6 +18,7 @@ use crate::{
     ProtoChunk,
     generation::structure::{
         piece::StructurePieceType,
+        start,
         structures::{
             StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
             StructurePiecesCollector, StructurePosition, WorldPortalExt,
@@ -32,6 +33,22 @@ pub enum MineshaftType {
 }
 
 impl MineshaftType {
+    /// Vanilla `MineshaftStructure.Type.ordinal`, which `MineShaftPiece` writes as `MST`.
+    const fn ordinal(self) -> i32 {
+        match self {
+            Self::Normal => 0,
+            Self::Mesa => 1,
+        }
+    }
+
+    /// Vanilla `MineshaftStructure.Type.byId`: an unknown id is `NORMAL`.
+    fn from_tag(tag: &NbtCompound) -> Self {
+        match tag.get_int("MST") {
+            Some(1) => Self::Mesa,
+            _ => Self::Normal,
+        }
+    }
+
     #[must_use]
     pub const fn wood(self) -> &'static BlockState {
         match self {
@@ -387,6 +404,23 @@ pub struct MineShaftRoom {
 }
 
 impl MineShaftRoom {
+    /// Vanilla `MineShaftRoom(CompoundTag)`. The entrance boxes that parse load, as vanilla
+    /// reads `Entrances` with `resultOrPartial`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        let entrances = tag
+            .get_list("Entrances")
+            .unwrap_or_default()
+            .iter()
+            .filter_map(start::box_from_tag)
+            .collect();
+        Self {
+            piece,
+            shaft_type: MineshaftType::from_tag(tag),
+            child_entrance_boxes: Arc::new(Mutex::new(entrances)),
+        }
+    }
+
     #[must_use]
     pub fn new(
         gen_depth: u32,
@@ -575,6 +609,19 @@ impl StructurePieceBase for MineShaftRoom {
         self
     }
 
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        tag.put_int("MST", self.shaft_type.ordinal());
+        let entrances = self
+            .child_entrance_boxes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(start::box_tag)
+            .collect();
+        tag.put_list("Entrances", entrances);
+        true
+    }
+
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece
     }
@@ -670,6 +717,19 @@ pub struct MineShaftCorridor {
 }
 
 impl MineShaftCorridor {
+    /// Vanilla `MineShaftCorridor(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            shaft_type: MineshaftType::from_tag(tag),
+            has_rails: tag.get_bool("hr").unwrap_or(false),
+            spider_corridor: tag.get_bool("sc").unwrap_or(false),
+            has_placed_spider: tag.get_bool("hps").unwrap_or(false),
+            num_sections: tag.get_int("Num").unwrap_or(0),
+        }
+    }
+
     #[must_use]
     pub fn new(
         gen_depth: u32,
@@ -1302,6 +1362,15 @@ impl StructurePieceBase for MineShaftCorridor {
         self
     }
 
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        tag.put_int("MST", self.shaft_type.ordinal());
+        tag.put_bool("hr", self.has_rails);
+        tag.put_bool("sc", self.spider_corridor);
+        tag.put_bool("hps", self.has_placed_spider);
+        tag.put_int("Num", self.num_sections);
+        true
+    }
+
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece
     }
@@ -1469,6 +1538,21 @@ pub struct MineShaftCrossing {
 }
 
 impl MineShaftCrossing {
+    /// Vanilla `MineShaftCrossing(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            shaft_type: MineshaftType::from_tag(tag),
+            direction: Some(
+                tag.get_int("D")
+                    .and_then(start::direction_from_2d_data_value)
+                    .unwrap_or(BlockDirection::South),
+            ),
+            is_two_floored: tag.get_bool("tf").unwrap_or(false),
+        }
+    }
+
     #[must_use]
     pub const fn new(
         gen_depth: u32,
@@ -1477,12 +1561,12 @@ impl MineShaftCrossing {
         shaft_type: MineshaftType,
     ) -> Self {
         let is_two_floored = bounding_box.max.y - bounding_box.min.y + 1 > 3;
-        let mut piece = StructurePiece::new(
+        // Vanilla keeps the direction of a crossing apart and leaves the piece unoriented.
+        let piece = StructurePiece::new(
             StructurePieceType::MineshaftCrossing,
             bounding_box,
             gen_depth,
         );
-        piece.set_facing(direction);
         Self {
             piece,
             shaft_type,
@@ -1737,6 +1821,17 @@ impl StructurePieceBase for MineShaftCrossing {
         self
     }
 
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        tag.put_int("MST", self.shaft_type.ordinal());
+        tag.put_bool("tf", self.is_two_floored);
+        // Vanilla always builds a crossing with a direction.
+        let Some(direction) = self.direction else {
+            return false;
+        };
+        tag.put_int("D", start::data_2d_value(Some(direction)));
+        true
+    }
+
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece
     }
@@ -1865,6 +1960,15 @@ pub struct MineShaftStairs {
 }
 
 impl MineShaftStairs {
+    /// Vanilla `MineShaftStairs(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            shaft_type: MineshaftType::from_tag(tag),
+        }
+    }
+
     #[must_use]
     pub const fn new(
         gen_depth: u32,
@@ -1972,6 +2076,11 @@ impl MineShaftStairs {
 impl StructurePieceBase for MineShaftStairs {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        tag.put_int("MST", self.shaft_type.ordinal());
+        true
     }
 
     fn get_structure_piece(&self) -> &StructurePiece {

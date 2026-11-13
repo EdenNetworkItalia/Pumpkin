@@ -656,7 +656,11 @@ fn template_starts_match_vanilla() {
 }
 
 /// The structure families of the vanilla dump whose own piece fields the dump does not hold.
-const DUMPED_FAMILIES: [&str; 2] = ["minecraft:ruined_portal", "minecraft:nether_fossil"];
+const DUMPED_FAMILIES: [&str; 3] = [
+    "minecraft:ruined_portal",
+    "minecraft:nether_fossil",
+    "minecraft:mineshaft",
+];
 
 /// The first starts of each family in `DUMPED_FAMILIES` and each dimension: the written pieces
 /// have the common fields of the dump, and every start loads back and saves unchanged.
@@ -711,11 +715,10 @@ fn dumped_starts_load_back() {
                 }
                 start
             };
-            assert_eq!(
-                own_fields(written),
-                vanilla_start_tag(&start),
-                "{}",
-                start.structure
+            assert_same_start(
+                &own_fields(written),
+                &vanilla_start_tag(&start),
+                &start.structure,
             );
 
             let key = StructureKeys::from_name(&start.structure).expect("known structure");
@@ -820,4 +823,43 @@ fn village_start_matches_vanilla_save() {
         .and_then(|starts| starts.get_compound("minecraft:village_plains"))
         .expect("the village start is written");
     assert_same_start(written, &expected, "village");
+}
+
+/// A mineshaft room loads the entrance boxes that parse, as vanilla reads `Entrances` with
+/// `resultOrPartial`.
+#[test]
+fn mineshaft_room_reads_partial_entrances() {
+    use crate::generation::structure::{
+        piece::StructurePieceType,
+        structures::{StructurePiece, mineshaft::MineShaftRoom},
+    };
+    use pumpkin_util::math::block_box::BlockBox;
+
+    let mut tag = NbtCompound::new();
+    tag.put_list(
+        "Entrances",
+        vec![
+            NbtTag::IntArray(vec![0, 10, 0, 2, 12, 2]),
+            NbtTag::IntArray(vec![1, 2]),
+            NbtTag::IntArray(vec![5, 10, 5, 7, 12, 7]),
+        ],
+    );
+    let piece = StructurePiece::new(
+        StructurePieceType::MineshaftRoom,
+        BlockBox::new(0, 0, 0, 9, 9, 9),
+        0,
+    );
+    let room = MineShaftRoom::from_tag(piece, &tag);
+    let entrances = room
+        .child_entrance_boxes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        entrances,
+        vec![
+            BlockBox::new(0, 10, 0, 2, 12, 2),
+            BlockBox::new(5, 10, 5, 7, 12, 7),
+        ]
+    );
 }

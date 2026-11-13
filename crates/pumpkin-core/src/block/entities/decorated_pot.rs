@@ -1,4 +1,5 @@
 use super::BlockEntity;
+use pumpkin_data::data_component_impl::{DataComponentImpl, PotDecorationsImpl};
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_nbt::tag::NbtTag;
@@ -7,7 +8,7 @@ use std::sync::Mutex;
 
 pub struct DecoratedPotBlockEntity {
     pub position: BlockPos,
-    pub sherds: Mutex<Option<Vec<NbtTag>>>,
+    pub sherds: Mutex<PotDecorationsImpl>,
     pub item: Mutex<Option<ItemStack>>,
 }
 
@@ -24,7 +25,10 @@ impl BlockEntity for DecoratedPotBlockEntity {
     where
         Self: Sized,
     {
-        let sherds = nbt.get_list("sherds").map(<[_]>::to_vec);
+        let sherds = nbt
+            .get("sherds")
+            .and_then(PotDecorationsImpl::read_data)
+            .unwrap_or_default();
         let item = nbt
             .get_compound("item")
             .and_then(ItemStack::read_item_stack);
@@ -37,9 +41,9 @@ impl BlockEntity for DecoratedPotBlockEntity {
 
     fn write_nbt(&self, nbt: &mut NbtCompound) {
         if let Ok(sherds) = self.sherds.lock()
-            && let Some(sh) = sherds.as_ref()
+            && !sherds.is_empty()
         {
-            nbt.put_list("sherds", sh.clone());
+            nbt.put("sherds", sherds.write_data());
         }
         if let Ok(item) = self.item.lock()
             && let Some(it) = item.as_ref()
@@ -53,9 +57,9 @@ impl BlockEntity for DecoratedPotBlockEntity {
     fn chunk_data_nbt(&self) -> Option<NbtCompound> {
         let mut nbt = NbtCompound::new();
         if let Ok(sherds) = self.sherds.try_lock()
-            && let Some(ref sh) = *sherds
+            && !sherds.is_empty()
         {
-            nbt.put_list("sherds", sh.clone());
+            nbt.put("sherds", sherds.write_data());
         }
         if let Ok(item) = self.item.try_lock()
             && let Some(ref it) = *item
@@ -71,25 +75,18 @@ impl BlockEntity for DecoratedPotBlockEntity {
         &self,
         _state_id: pumpkin_data::BlockStateId,
     ) -> Option<NbtCompound> {
-        let sherds_guard = self.sherds.lock().ok();
-        let sherds = sherds_guard.as_ref().and_then(|s| s.as_deref());
-        Some(build_decorated_pot_actor(self.position, sherds))
+        let sherds = self
+            .sherds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(build_decorated_pot_actor(self.position, &sherds))
     }
 
     fn collect_item_components(&self, stack: &mut ItemStack) {
         if let Ok(sherds) = self.sherds.lock()
-            && let Some(sh) = sherds.as_ref()
+            && !sherds.is_empty()
         {
-            let sherds_vec: Vec<std::borrow::Cow<'static, str>> = sh
-                .iter()
-                .filter_map(NbtTag::extract_string)
-                .map(|s| std::borrow::Cow::Owned(s.to_string()))
-                .collect();
-            if !sherds_vec.is_empty() {
-                stack.set_data_component(pumpkin_data::data_component_impl::PotDecorationsImpl {
-                    sherds: sherds_vec,
-                });
-            }
+            stack.set_data_component(sherds.clone());
         }
         if let Ok(item) = self.item.lock()
             && let Some(it) = item.as_ref()
@@ -102,19 +99,13 @@ impl BlockEntity for DecoratedPotBlockEntity {
     }
 
     fn apply_item_components(&self, stack: &ItemStack) {
-        if let Some(decorations) =
-            stack.get_data_component::<pumpkin_data::data_component_impl::PotDecorationsImpl>()
-            && !decorations.sherds.is_empty()
+        if let Some(decorations) = stack.get_data_component::<PotDecorationsImpl>()
+            && !decorations.is_empty()
         {
-            let tags: Vec<NbtTag> = decorations
-                .sherds
-                .iter()
-                .map(|s| NbtTag::String(s.to_string().into()))
-                .collect();
             *self
                 .sherds
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tags);
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = decorations.clone();
         }
         if let Some(container) =
             stack.get_data_component::<pumpkin_data::data_component_impl::ContainerImpl>()
@@ -140,7 +131,7 @@ impl DecoratedPotBlockEntity {
     pub const fn new(position: BlockPos) -> Self {
         Self {
             position,
-            sherds: Mutex::new(None),
+            sherds: Mutex::new(PotDecorationsImpl),
             item: Mutex::new(None),
         }
     }
@@ -208,22 +199,15 @@ impl DecoratedPotBlockEntity {
     }
 }
 
-/// Builds the Bedrock block-actor NBT for decorated pots.
+/// Builds the Bedrock block-actor NBT for decorated pots: four item names, an empty side as a
+/// brick.
 #[must_use]
-pub fn build_decorated_pot_actor(position: BlockPos, sherds: Option<&[NbtTag]>) -> NbtCompound {
-    let default_brick = NbtTag::String("minecraft:brick".into());
-    let sherd_tags = if let Some(tags) = sherds
-        && tags.len() >= 4
-    {
-        tags.iter().take(4).cloned().collect()
-    } else {
-        vec![
-            default_brick.clone(),
-            default_brick.clone(),
-            default_brick.clone(),
-            default_brick,
-        ]
-    };
+pub fn build_decorated_pot_actor(position: BlockPos, sherds: &PotDecorationsImpl) -> NbtCompound {
+    let sherd_tags = sherds
+        .ordered()
+        .into_iter()
+        .map(|id| NbtTag::String(id.into_owned().into()))
+        .collect();
 
     super::bedrock::BedrockBlockActorBuilder::new("DecoratedPot", position)
         .put_list("sherds", sherd_tags)
@@ -237,13 +221,13 @@ mod tests {
     #[test]
     fn decorated_pot_actor_builder() {
         let pos = BlockPos::new(2, 64, 2);
-        let sherds = vec![
-            NbtTag::String("minecraft:archer_pottery_sherd".into()),
-            NbtTag::String("minecraft:brick".into()),
-            NbtTag::String("minecraft:prize_pottery_sherd".into()),
-            NbtTag::String("minecraft:miner_pottery_sherd".into()),
-        ];
-        let nbt = build_decorated_pot_actor(pos, Some(&sherds));
+        let sherds = PotDecorationsImpl::from_list([
+            Some("minecraft:archer_pottery_sherd"),
+            Some("minecraft:brick"),
+            Some("minecraft:prize_pottery_sherd"),
+            Some("minecraft:miner_pottery_sherd"),
+        ]);
+        let nbt = build_decorated_pot_actor(pos, &sherds);
         assert_eq!(nbt.get_string("id"), Some("DecoratedPot"));
         let list = nbt.get_list("sherds").expect("sherds missing");
         assert_eq!(list.len(), 4);
@@ -252,5 +236,85 @@ mod tests {
             Some("minecraft:archer_pottery_sherd")
         );
         assert_eq!(list[1].extract_string(), Some("minecraft:brick"));
+
+        // An empty side is a brick on Bedrock too.
+        let mut front_only = PotDecorationsImpl::default();
+        front_only.sherds[3] = Some("minecraft:heart_pottery_sherd".into());
+        let nbt = build_decorated_pot_actor(pos, &front_only);
+        let list = nbt.get_list("sherds").expect("sherds missing");
+        let names: Vec<_> = list.iter().filter_map(NbtTag::extract_string).collect();
+        assert_eq!(
+            names,
+            [
+                "minecraft:brick",
+                "minecraft:brick",
+                "minecraft:brick",
+                "minecraft:heart_pottery_sherd"
+            ]
+        );
+    }
+
+    fn sherd_ids(sherds: &NbtTag) -> [Option<&str>; 4] {
+        let NbtTag::Compound(map) = sherds else {
+            panic!("sherds must be written as a compound");
+        };
+        ["back", "left", "right", "front"].map(|side| {
+            map.get_compound(side)
+                .and_then(|side| side.get_string("id"))
+        })
+    }
+
+    #[test]
+    fn sherds_are_written_as_the_four_side_map_and_read_from_both_shapes() {
+        // 26.3 `DecoratedPotBlockEntity` stores `sherds` with `PotDecorations.CODEC`.
+        let expected = [
+            Some("minecraft:archer_pottery_sherd"),
+            Some("minecraft:brick"),
+            Some("minecraft:prize_pottery_sherd"),
+            Some("minecraft:miner_pottery_sherd"),
+        ];
+        let ids = expected.map(|id| NbtTag::String(id.unwrap().into()));
+
+        let mut as_list = NbtCompound::new();
+        as_list.put_list("sherds", ids.to_vec());
+        let pot = DecoratedPotBlockEntity::from_nbt(&as_list, BlockPos::new(0, 0, 0));
+
+        let mut written = NbtCompound::new();
+        pot.write_nbt(&mut written);
+        assert_eq!(sherd_ids(written.get("sherds").unwrap()), expected);
+        assert_eq!(
+            sherd_ids(pot.chunk_data_nbt().unwrap().get("sherds").unwrap()),
+            expected
+        );
+
+        let reloaded = DecoratedPotBlockEntity::from_nbt(&written, BlockPos::new(0, 0, 0));
+        let mut rewritten = NbtCompound::new();
+        reloaded.write_nbt(&mut rewritten);
+        assert_eq!(sherd_ids(rewritten.get("sherds").unwrap()), expected);
+    }
+
+    #[test]
+    fn a_missing_side_stays_empty_and_no_sherds_write_nothing() {
+        // `PotDecorations.CODEC` reads every side with `optionalFieldOf`.
+        let mut front = NbtCompound::new();
+        front.put_string("id", "minecraft:heart_pottery_sherd".to_string());
+        let mut map = NbtCompound::new();
+        map.put_compound("front", front);
+        let mut nbt = NbtCompound::new();
+        nbt.put_compound("sherds", map);
+        let pot = DecoratedPotBlockEntity::from_nbt(&nbt, BlockPos::new(0, 0, 0));
+
+        let mut written = NbtCompound::new();
+        pot.write_nbt(&mut written);
+        assert_eq!(
+            sherd_ids(written.get("sherds").unwrap()),
+            [None, None, None, Some("minecraft:heart_pottery_sherd")]
+        );
+
+        // `DecoratedPotBlockEntity.saveAdditional` skips `PotDecorations.EMPTY`.
+        let plain = DecoratedPotBlockEntity::from_nbt(&NbtCompound::new(), BlockPos::new(0, 0, 0));
+        let mut written = NbtCompound::new();
+        plain.write_nbt(&mut written);
+        assert!(written.get("sherds").is_none());
     }
 }

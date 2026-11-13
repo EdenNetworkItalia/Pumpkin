@@ -72,7 +72,7 @@ impl RecipeResult {
             stack.patch.push((*component, Some(value.clone_dyn())));
         }
         if let Some(sherds) = self.pot_decorations {
-            let sherd_names = sherds
+            let sherd_names: Vec<std::borrow::Cow<'static, str>> = sherds
                 .into_iter()
                 .map(|id| {
                     let reg_key =
@@ -84,9 +84,9 @@ impl RecipeResult {
                     }
                 })
                 .collect();
-            stack.set_data_component(PotDecorationsImpl {
-                sherds: sherd_names,
-            });
+            stack.set_data_component(PotDecorationsImpl::from_list(
+                sherd_names.iter().map(|id| Some(&**id)),
+            ));
         }
         stack
     }

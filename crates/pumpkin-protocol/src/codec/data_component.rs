@@ -2957,8 +2957,11 @@ impl DataComponentCodec<Self> for BaseColorImpl {
 
 impl DataComponentCodec<Self> for PotDecorationsImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
-        seq.write_var_int(&VarInt::from(self.sherds.len() as i32))?;
-        for sherd in &self.sherds {
+        // The wire list has no empty entry: an empty side is sent as a brick, as vanilla draws it.
+        let ordered = self.ordered();
+        let sherds: &[Cow<'static, str>] = if self.is_empty() { &[] } else { &ordered };
+        seq.write_var_int(&VarInt::from(sherds.len() as i32))?;
+        for sherd in sherds {
             let name = sherd.strip_prefix("minecraft:").unwrap_or(sherd);
             let id = pumpkin_data::item::Item::from_registry_key(name)
                 .map_or(pumpkin_data::item::Item::BRICK.id as i32, |item| {
@@ -2976,14 +2979,16 @@ impl DataComponentCodec<Self> for PotDecorationsImpl {
             let id = seq.get_var_int()?.0 as u16;
             let name = pumpkin_data::item::Item::from_id(id)
                 .map_or("minecraft:brick", |item| item.registry_key);
-            let full_name = if name.starts_with("minecraft:") {
+            sherds.push(if name.starts_with("minecraft:") {
                 Cow::Borrowed(name)
             } else {
                 Cow::Owned(format!("minecraft:{name}"))
-            };
-            sherds.push(full_name);
+            });
         }
-        Ok(Self { sherds })
+        if sherds.is_empty() {
+            return Ok(Self::default());
+        }
+        Ok(Self::from_list(sherds.iter().map(|name| Some(&**name))))
     }
 }
 
@@ -3478,6 +3483,7 @@ impl DataComponentCodec<Self> for WaxedImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pumpkin_data::item::Item;
 
     fn textured_profile() -> ProfileImpl {
         ProfileImpl {
@@ -3623,6 +3629,50 @@ mod tests {
                 "material reference {material} was accepted"
             );
         }
+    }
+
+    #[test]
+    fn pot_decorations_round_trip_the_wire_list() {
+        // A missing side is sent as a brick, and an empty component as an empty list.
+        let decorations = PotDecorationsImpl {
+            sherds: [
+                Some(Cow::Borrowed("minecraft:archer_pottery_sherd")),
+                None,
+                Some(Cow::Borrowed("minecraft:prize_pottery_sherd")),
+                None,
+            ],
+        };
+        let mut encoded = Vec::new();
+        decorations.serialize(&mut encoded).unwrap();
+        let mut expected = vec![4];
+        for item in [
+            &Item::ARCHER_POTTERY_SHERD,
+            &Item::BRICK,
+            &Item::PRIZE_POTTERY_SHERD,
+            &Item::BRICK,
+        ] {
+            expected.write_var_int(&VarInt(i32::from(item.id))).unwrap();
+        }
+        assert_eq!(encoded, expected);
+        let decoded = PotDecorationsImpl::deserialize(&mut encoded.as_slice()).unwrap();
+        assert_eq!(
+            decoded.sherds,
+            [
+                Some(Cow::Borrowed("minecraft:archer_pottery_sherd")),
+                Some(Cow::Borrowed("minecraft:brick")),
+                Some(Cow::Borrowed("minecraft:prize_pottery_sherd")),
+                Some(Cow::Borrowed("minecraft:brick")),
+            ]
+        );
+
+        let mut empty = Vec::new();
+        PotDecorationsImpl::default().serialize(&mut empty).unwrap();
+        assert_eq!(empty, [0]);
+        assert!(
+            PotDecorationsImpl::deserialize(&mut empty.as_slice())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     fn enchantment_wire_bytes(id: u8, level: i32) -> Vec<u8> {

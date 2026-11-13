@@ -333,6 +333,8 @@ pub struct StatusResponse {
     /// The icon displayed. (Optional)
     pub favicon: Option<String>,
     /// Whether players are forced to use secure chat.
+    /// The vanilla key is `enforcesSecureChat`, not the camelCase of the field name.
+    #[serde(rename = "enforcesSecureChat")]
     pub enforce_secure_chat: bool,
 }
 #[derive(Clone, serde::Serialize)]

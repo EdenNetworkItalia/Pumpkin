@@ -233,3 +233,20 @@ impl Default for CachedStatus {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_uses_the_vanilla_enforces_secure_chat_key() {
+        let config = BasicConfiguration {
+            use_favicon: false,
+            ..BasicConfiguration::default()
+        };
+        let response = CachedStatus::build_response(&config, "test", 20);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["enforcesSecureChat"], serde_json::Value::Bool(true));
+        assert!(json.get("enforceSecureChat").is_none());
+    }
+}

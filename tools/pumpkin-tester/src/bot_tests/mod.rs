@@ -8,6 +8,7 @@ mod polar_bear;
 mod sheep_shearing;
 mod sign_authorization;
 mod status_ping;
+mod use_block_swing;
 mod world_interaction;
 
 use std::{net::SocketAddr, sync::Arc};
@@ -23,7 +24,7 @@ pub async fn run_bot_tests(
 ) -> Result<(), String> {
     status_ping::run_bot_status_ping_test(addr, summary_lines).await?;
 
-    let (mut bot1, bot2) =
+    let (mut bot1, mut bot2) =
         login_and_movement::run_login_and_movement_tests(server, addr, summary_lines).await?;
 
     commands_and_gamemode::run_commands_and_gamemode_tests(
@@ -37,6 +38,8 @@ pub async fn run_bot_tests(
     loot_tables::run_loot_table_tests(server, &mut bot1, summary_lines).await?;
 
     world_interaction::run_world_interaction_tests(server, &mut bot1, summary_lines).await?;
+
+    use_block_swing::run_use_block_swing_test(server, &mut bot1, &mut bot2, summary_lines).await?;
 
     sheep_shearing::run_sheep_shearing_test(server, summary_lines)?;
 

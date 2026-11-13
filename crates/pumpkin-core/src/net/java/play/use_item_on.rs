@@ -165,9 +165,7 @@ impl JavaClient {
                     },
                 );
 
-                if matches!(result, BlockActionResult::SuccessServer) {
-                    player.swing_hand(hand, true);
-                }
+                Self::swing_after_use(player, hand, &result);
                 return Ok(());
             }
         }
@@ -244,9 +242,11 @@ impl JavaClient {
             );
         }
 
-        if matches!(item_result, BlockActionResult::SuccessServer) {
-            player.swing_hand(hand, true);
+        // `BlockItem.useOn` returns `Success` once the block is placed.
+        if should_try_decrement {
+            player.swing_hand(hand, false);
         }
+        Self::swing_after_use(player, hand, &item_result);
 
         // Broadcast the break entity status before the slot sync; the client
         // needs the old item texture in the slot for break particles.
@@ -272,6 +272,16 @@ impl JavaClient {
         }
 
         Ok(())
+    }
+
+    /// Vanilla `handleUseItemOn` swings for a `Success` result. `SwingSource.PREDICTED` skips the
+    /// swinging player, whose client already swings; `SERVER_ONLY` includes it.
+    fn swing_after_use(player: &Arc<Player>, hand: Hand, result: &BlockActionResult) {
+        match result {
+            BlockActionResult::SuccessServer => player.swing_hand(hand, true),
+            BlockActionResult::Success => player.swing_hand(hand, false),
+            _ => {}
+        }
     }
 
     #[expect(clippy::too_many_arguments)]

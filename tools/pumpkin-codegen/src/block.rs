@@ -1740,6 +1740,44 @@ pub fn build() -> TokenStream {
             fn from_props(props: &[Property], block: &Block) -> Self where Self: Sized;
         }
 
+        /// The properties of a block that has none. Its only state is the default one, so given
+        /// properties are ignored, like vanilla's codec for a singleton state definition.
+        struct NoProperties;
+
+        impl BlockProperties for NoProperties {
+            fn to_index(&self) -> u16 {
+                0
+            }
+
+            fn from_index(_index: u16) -> Self {
+                Self
+            }
+
+            fn handles_block_id(id: BlockId) -> bool {
+                Block::from_id(id).states.len() == 1
+            }
+
+            fn to_state_id(&self, block: &Block) -> BlockStateId {
+                block.default_state.id
+            }
+
+            fn from_state_id(_id: BlockStateId, _block: &Block) -> Self {
+                Self
+            }
+
+            fn default(_block: &Block) -> Self {
+                Self
+            }
+
+            fn to_props(&self) -> Vec<Property> {
+                Vec::new()
+            }
+
+            fn from_props(_props: &[Property], _block: &Block) -> Self {
+                Self
+            }
+        }
+
         pub trait EnumVariants {
             fn variant_count() -> u16;
             fn to_index(&self) -> u16;
@@ -1958,7 +1996,7 @@ pub fn build() -> TokenStream {
             pub fn from_properties(&self, props: &[Property]) -> Box<dyn BlockProperties> {
                 match self.id {
                     #(#block_properties_from_props_and_name_arms)*
-                    _ => panic!("Invalid props")
+                    _ => Box::new(NoProperties),
                 }
             }
 

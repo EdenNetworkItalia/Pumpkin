@@ -1687,4 +1687,17 @@ mod tests {
                 .id
         );
     }
+
+    #[test]
+    fn extract_u16_array_ignores_properties_of_a_block_without_any() {
+        let mut entry = NbtCompound::new();
+        entry.put_string("Name", "minecraft:stone".to_string());
+        let mut props = NbtCompound::new();
+        props.put_string("waterlogged", "true".to_string());
+        entry.put_compound("Properties", props);
+
+        let list_tag = NbtTag::List(vec![NbtTag::Compound(entry)]);
+        let result = extract_u16_array(&list_tag).expect("should extract palette");
+        assert_eq!(result[..], [Block::STONE.default_state.id]);
+    }
 }

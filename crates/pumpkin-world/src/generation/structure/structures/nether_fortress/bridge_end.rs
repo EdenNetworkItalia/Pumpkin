@@ -2,7 +2,7 @@ use pumpkin_data::Block;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
-    random::{RandomGenerator, RandomImpl},
+    random::{RandomGenerator, RandomImpl, legacy_rand::LegacyRand},
 };
 
 use crate::{
@@ -51,6 +51,12 @@ impl BridgeEndPiece {
         piece.piece.set_facing(Some(orientation));
         Some(Box::new(Self { piece, seed }))
     }
+
+    /// The random that crumbles the bridge end. Vanilla
+    /// `RandomSource.createThreadLocalInstance(selfSeed)` widens the int seed with its sign.
+    const fn crumble_random(&self) -> LegacyRand {
+        LegacyRand::from_seed(self.seed as i32 as i64 as u64)
+    }
 }
 
 impl StructurePieceBase for BridgeEndPiece {
@@ -78,8 +84,7 @@ impl StructurePieceBase for BridgeEndPiece {
         let nb = Block::NETHER_BRICKS.default_state;
 
         // Use a seeded local random so geometry is deterministic.
-        let mut rng =
-            pumpkin_util::random::legacy_rand::LegacyRand::from_seed((self.seed as i64) as u64);
+        let mut rng = self.crumble_random();
 
         for i in 0..=4i32 {
             for j in 3..=4i32 {
@@ -105,5 +110,26 @@ impl StructurePieceBase for BridgeEndPiece {
                 p.fill_with_outline(chunk, &bb, false, i, j, 0, i, j, k, nb, nb);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The first values of `new SingleThreadedRandomSource(-123456789).nextInt(8)` in vanilla.
+    #[test]
+    fn bridge_end_random_matches_vanilla() {
+        let piece = BridgeEndPiece {
+            piece: NetherFortressPiece::new(
+                StructurePieceType::NetherFortressBridgeEnd,
+                0,
+                BlockBox::new(0, 0, 0, 4, 9, 7),
+            ),
+            seed: (-123_456_789i32) as u32,
+        };
+        let mut random = piece.crumble_random();
+        let values: Vec<i32> = (0..10).map(|_| random.next_bounded_i32(8)).collect();
+        assert_eq!(values, [2, 6, 7, 5, 3, 3, 6, 5, 0, 2]);
     }
 }

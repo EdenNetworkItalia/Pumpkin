@@ -18,6 +18,8 @@ use pumpkin_util::version::JavaMinecraftVersion;
 
 const MAX_STATUS_EFFECTS: usize = 128;
 const MAX_INITIAL_COLLECTION_SIZE: usize = 65536;
+/// The sides of a decorated pot: back, left, right and front.
+const POT_DECORATION_SIDES: usize = 4;
 
 fn read_count(seq: &mut impl NetworkReadExt, max_size: usize) -> Result<usize, ReadingError> {
     let count = seq.get_var_int()?.0;
@@ -2955,40 +2957,35 @@ impl DataComponentCodec<Self> for BaseColorImpl {
     }
 }
 
+/// Vanilla `PotDecorations.STREAM_CODEC`: back, left, right and front, each an optional
+/// `ItemStackTemplate`. The sherd list holds the sides in that order.
 impl DataComponentCodec<Self> for PotDecorationsImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
-        // The wire list has no empty entry: an empty side is sent as a brick, as vanilla draws it.
-        let ordered = self.ordered();
-        let sherds: &[Cow<'static, str>] = if self.is_empty() { &[] } else { &ordered };
-        seq.write_var_int(&VarInt::from(sherds.len() as i32))?;
-        for sherd in sherds {
-            let name = sherd.strip_prefix("minecraft:").unwrap_or(sherd);
-            let id = pumpkin_data::item::Item::from_registry_key(name)
-                .map_or(pumpkin_data::item::Item::BRICK.id as i32, |item| {
-                    item.id as i32
-                });
-            seq.write_var_int(&VarInt::from(id))?;
+        for side in 0..POT_DECORATION_SIDES {
+            seq.write_option(&self.sherds[side], |seq, sherd| {
+                let item = pumpkin_data::item::Item::from_registry_key(sherd)
+                    .unwrap_or(&pumpkin_data::item::Item::BRICK);
+                serialize_item_stack_template(
+                    &pumpkin_data::item_stack::ItemStack::new(1, item),
+                    seq,
+                )
+            })?;
         }
         Ok(())
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let len = seq.get_var_int()?.0 as usize;
-        let mut sherds = Vec::with_capacity(len.min(16));
-        for _ in 0..len {
-            let id = seq.get_var_int()?.0 as u16;
-            let name = pumpkin_data::item::Item::from_id(id)
-                .map_or("minecraft:brick", |item| item.registry_key);
-            sherds.push(if name.starts_with("minecraft:") {
-                Cow::Borrowed(name)
-            } else {
-                Cow::Owned(format!("minecraft:{name}"))
-            });
+        let mut sherds = [const { None }; POT_DECORATION_SIDES];
+        for side in &mut sherds {
+            *side = seq.get_option(|seq| {
+                let stack = deserialize_item_stack_template(seq)?;
+                if stack.is_empty() {
+                    return Err(ReadingError::Message("Empty item in PotDecorations".into()));
+                }
+                Ok(Cow::Owned(format!("minecraft:{}", stack.item.registry_key)))
+            })?;
         }
-        if sherds.is_empty() {
-            return Ok(Self::default());
-        }
-        Ok(Self::from_list(sherds.iter().map(|name| Some(&**name))))
+        Ok(Self { sherds })
     }
 }
 
@@ -3631,48 +3628,82 @@ mod tests {
         }
     }
 
+    /// Appends one side of vanilla `PotDecorations.STREAM_CODEC`: `ByteBufCodecs.optional` of
+    /// `ItemStackTemplate.STREAM_CODEC`, which is the item holder id, the count and the patch.
+    fn push_pot_side(bytes: &mut Vec<u8>, item: Option<&Item>) {
+        let Some(item) = item else {
+            bytes.push(0);
+            return;
+        };
+        bytes.push(1);
+        bytes.write_var_int(&VarInt(i32::from(item.id))).unwrap();
+        bytes.extend_from_slice(&[1, 0, 0]); // count 1, no added or removed components
+    }
+
+    fn pot_bytes(sides: [Option<&Item>; 4]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for side in sides {
+            push_pot_side(&mut bytes, side);
+        }
+        bytes
+    }
+
     #[test]
-    fn pot_decorations_round_trip_the_wire_list() {
-        // A missing side is sent as a brick, and an empty component as an empty list.
+    fn pot_decorations_are_written_as_four_optional_templates() {
         let decorations = PotDecorationsImpl {
             sherds: [
                 Some(Cow::Borrowed("minecraft:archer_pottery_sherd")),
                 None,
-                Some(Cow::Borrowed("minecraft:prize_pottery_sherd")),
-                None,
+                Some(Cow::Borrowed("minecraft:brick")),
+                Some(Cow::Borrowed("minecraft:miner_pottery_sherd")),
             ],
         };
         let mut encoded = Vec::new();
         decorations.serialize(&mut encoded).unwrap();
-        let mut expected = vec![4];
-        for item in [
-            &Item::ARCHER_POTTERY_SHERD,
-            &Item::BRICK,
-            &Item::PRIZE_POTTERY_SHERD,
-            &Item::BRICK,
-        ] {
-            expected.write_var_int(&VarInt(i32::from(item.id))).unwrap();
-        }
-        assert_eq!(encoded, expected);
-        let decoded = PotDecorationsImpl::deserialize(&mut encoded.as_slice()).unwrap();
+        assert_eq!(
+            encoded,
+            pot_bytes([
+                Some(&Item::ARCHER_POTTERY_SHERD),
+                None,
+                Some(&Item::BRICK),
+                Some(&Item::MINER_POTTERY_SHERD),
+            ])
+        );
+
+        let mut encoded = Vec::new();
+        PotDecorationsImpl::default()
+            .serialize(&mut encoded)
+            .unwrap();
+        assert_eq!(encoded, pot_bytes([None; 4]));
+    }
+
+    #[test]
+    fn pot_decorations_are_read_from_four_optional_templates() {
+        let bytes = pot_bytes([
+            Some(&Item::ARCHER_POTTERY_SHERD),
+            None,
+            None,
+            Some(&Item::MINER_POTTERY_SHERD),
+        ]);
+        let mut slice = bytes.as_slice();
+        let decoded = PotDecorationsImpl::deserialize(&mut slice).unwrap();
+        assert!(slice.is_empty());
         assert_eq!(
             decoded.sherds,
             [
                 Some(Cow::Borrowed("minecraft:archer_pottery_sherd")),
-                Some(Cow::Borrowed("minecraft:brick")),
-                Some(Cow::Borrowed("minecraft:prize_pottery_sherd")),
-                Some(Cow::Borrowed("minecraft:brick")),
+                None,
+                None,
+                Some(Cow::Borrowed("minecraft:miner_pottery_sherd")),
             ]
         );
 
-        let mut empty = Vec::new();
-        PotDecorationsImpl::default().serialize(&mut empty).unwrap();
-        assert_eq!(empty, [0]);
-        assert!(
-            PotDecorationsImpl::deserialize(&mut empty.as_slice())
-                .unwrap()
-                .is_empty()
-        );
+        let empty = PotDecorationsImpl::deserialize(&mut pot_bytes([None; 4]).as_slice()).unwrap();
+        assert!(empty.is_empty());
+
+        // `ItemStackTemplate` rejects an empty item.
+        let air = pot_bytes([Some(&Item::AIR), None, None, None]);
+        assert!(PotDecorationsImpl::deserialize(&mut air.as_slice()).is_err());
     }
 
     fn enchantment_wire_bytes(id: u8, level: i32) -> Vec<u8> {

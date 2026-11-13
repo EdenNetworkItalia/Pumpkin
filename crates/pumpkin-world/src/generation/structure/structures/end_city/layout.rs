@@ -31,14 +31,14 @@ pub(super) struct PieceDescriptor {
     pub rotation: Rotation,
     pub overwrite: bool,
     pub bounding_box: BlockBox,
-    generation_group: i32,
-    #[cfg(test)]
-    pub template_name: &'static str,
+    /// Vanilla stores the generation group of an end city piece as its `genDepth`.
+    pub generation_group: i32,
+    pub template_name: String,
 }
 
 impl PieceDescriptor {
     pub(super) fn new(
-        template_name: &'static str,
+        template_name: &str,
         template_position: Vector3<i32>,
         rotation: Rotation,
         overwrite: bool,
@@ -65,8 +65,7 @@ impl PieceDescriptor {
             overwrite,
             bounding_box,
             generation_group: 0,
-            #[cfg(test)]
-            template_name,
+            template_name: template_name.to_string(),
         })
     }
 
@@ -598,7 +597,7 @@ mod tests {
         assert_eq!(
             pieces
                 .iter()
-                .map(|piece| piece.template_name)
+                .map(|piece| piece.template_name.as_str())
                 .collect::<Vec<_>>(),
             [
                 "base_floor",

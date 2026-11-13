@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use pumpkin_data::{Block, BlockDirection, BlockState, Mirror, Rotation};
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     math::{block_box::BlockBox, position::BlockPos, vector3::Vector3},
     random::{
@@ -14,6 +15,7 @@ use crate::{
         positions::chunk_pos::{start_block_x, start_block_z},
         structure::{
             piece::StructurePieceType,
+            start,
             structures::{
                 StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
                 StructurePiecesCollector, StructurePosition, WorldPortalExt,
@@ -145,14 +147,30 @@ impl NetherFossilPiece {
     ) -> Self {
         let place_settings = make_settings(rotation);
         let bounding_box = template.get_bounding_box(&place_settings, template_position);
+        let piece = StructurePiece::new(StructurePieceType::NetherFossil, bounding_box, 0);
 
         Self {
-            piece: StructurePiece::new(StructurePieceType::NetherFossil, bounding_box, 0),
+            piece: start::template_piece(piece, bounding_box),
             template,
             template_name,
             place_settings,
             template_position,
         }
+    }
+
+    /// Vanilla `NetherFossilPiece(StructureTemplateManager, CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Option<Self> {
+        let (template_name, template_position) = start::template_fields(tag)?;
+        let template_name = start::minecraft_path(template_name)?.to_string();
+        let mut loaded = Self::new(
+            get_template(&template_name)?,
+            template_name,
+            template_position,
+            start::rotation_from_name(tag.get_string("Rot")?)?,
+        );
+        loaded.piece = start::template_piece(piece, loaded.piece.bounding_box);
+        Some(loaded)
     }
 
     fn place_blocks(&self, chunk: &mut ProtoChunk, chunk_box: &BlockBox) {
@@ -252,6 +270,18 @@ impl NetherFossilPiece {
 impl StructurePieceBase for NetherFossilPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        start::add_template_save_data(
+            tag,
+            &format!("minecraft:{}", self.template_name),
+            self.template_position,
+        );
+        tag.put_string(
+            "Rot",
+            start::rotation_name(self.place_settings.get_rotation()).to_string(),
+        );
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece

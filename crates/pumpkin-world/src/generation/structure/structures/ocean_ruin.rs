@@ -15,6 +15,7 @@ use crate::{
     ProtoChunk,
     generation::structure::{
         piece::StructurePieceType,
+        start,
         structures::{
             StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
             StructurePiecesCollector, StructurePosition, WorldPortalExt,
@@ -365,8 +366,9 @@ impl OceanRuinPiece {
             .set_rotation(rotation)
             .set_mirror(Mirror::None);
         let bounding_box = template.get_bounding_box(&place_settings, position);
+        let piece = StructurePiece::new(StructurePieceType::OceanTemple, bounding_box, 0);
         Self {
-            piece: StructurePiece::new(StructurePieceType::OceanTemple, bounding_box, 0),
+            piece: start::template_piece(piece, bounding_box),
             template,
             template_name,
             template_position: position,
@@ -375,6 +377,29 @@ impl OceanRuinPiece {
             is_warm,
             is_large,
         }
+    }
+
+    /// Vanilla `OceanRuinPiece.create(StructureTemplateManager, CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Option<Self> {
+        let (template_name, template_position) = start::template_fields(tag)?;
+        let template_name = start::minecraft_path(template_name)?.to_string();
+        let is_warm = match tag.get_string("BiomeType")? {
+            "WARM" => true,
+            "COLD" => false,
+            _ => return None,
+        };
+        let mut loaded = Self::new(
+            get_template(&template_name)?,
+            template_name,
+            template_position,
+            start::rotation_from_name(tag.get_string("Rot")?)?,
+            tag.get_float("Integrity").unwrap_or(0.0),
+            is_warm,
+            tag.get_bool("IsLarge").unwrap_or(false),
+        );
+        loaded.piece = start::template_piece(piece, loaded.piece.bounding_box);
+        Some(loaded)
     }
 
     fn calculate_height(pos: Vector3<i32>, corner: Vector3<i32>, chunk: &ProtoChunk) -> i32 {
@@ -409,6 +434,20 @@ impl OceanRuinPiece {
 impl StructurePieceBase for OceanRuinPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        start::add_template_save_data(
+            tag,
+            &format!("minecraft:{}", self.template_name),
+            self.template_position,
+        );
+        tag.put_string("Rot", start::rotation_name(self.rotation).to_string());
+        tag.put_float("Integrity", self.integrity);
+        let biome_type = if self.is_warm { "WARM" } else { "COLD" };
+        tag.put_string("BiomeType", biome_type.to_string());
+        tag.put_bool("IsLarge", self.is_large);
+        true
     }
 
     fn get_structure_piece(&self) -> &StructurePiece {

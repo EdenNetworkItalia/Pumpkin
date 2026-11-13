@@ -13,6 +13,7 @@ use crate::{
     ProtoChunk,
     generation::structure::{
         piece::StructurePieceType,
+        start,
         structures::{
             StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
             StructurePiecesCollector, StructurePosition,
@@ -70,17 +71,38 @@ impl StructureGenerator for EndCityGenerator {
     }
 }
 
-struct EndCityTemplatePiece {
+pub(crate) struct EndCityTemplatePiece {
     piece: StructurePiece,
     descriptor: PieceDescriptor,
 }
 
 impl EndCityTemplatePiece {
     const fn new(descriptor: PieceDescriptor) -> Self {
+        let piece = StructurePiece::new(
+            StructurePieceType::EndCity,
+            descriptor.bounding_box,
+            descriptor.generation_group as u32,
+        );
         Self {
-            piece: StructurePiece::new(StructurePieceType::EndCity, descriptor.bounding_box, 0),
+            piece: start::template_piece(piece, descriptor.bounding_box),
             descriptor,
         }
+    }
+
+    /// Vanilla `EndCityPiece(StructureTemplateManager, CompoundTag)`.
+    pub(crate) fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Option<Self> {
+        let (template_name, template_position) = start::template_fields(tag)?;
+        let mut descriptor = PieceDescriptor::new(
+            template_name,
+            template_position,
+            start::rotation_from_name(tag.get_string("Rot")?)?,
+            tag.get_bool("OW").unwrap_or(false),
+        )?;
+        descriptor.generation_group = piece.chain_length as i32;
+        Some(Self {
+            piece: start::template_piece(piece, descriptor.bounding_box),
+            descriptor,
+        })
     }
 
     const fn world_position(&self, local: Vector3<i32>) -> Vector3<i32> {
@@ -257,6 +279,20 @@ impl EndCityTemplatePiece {
 impl StructurePieceBase for EndCityTemplatePiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        start::add_template_save_data(
+            tag,
+            &self.descriptor.template_name,
+            self.descriptor.template_position,
+        );
+        tag.put_string(
+            "Rot",
+            start::rotation_name(self.descriptor.rotation).to_string(),
+        );
+        tag.put_bool("OW", self.descriptor.overwrite);
+        true
     }
 
     fn get_structure_piece(&self) -> &StructurePiece {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use pumpkin_data::{Block, BlockState, Mirror, Rotation};
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     math::{block_box::BlockBox, position::BlockPos, vector3::Vector3},
     random::{RandomGenerator, RandomImpl, hash_block_pos, legacy_rand::LegacyRand},
@@ -12,6 +13,7 @@ use crate::{
         positions::chunk_pos::{start_block_x, start_block_z},
         structure::{
             piece::StructurePieceType,
+            start,
             structures::{
                 StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
                 StructurePiecesCollector, StructurePosition, WorldPortalExt,
@@ -158,14 +160,35 @@ impl IglooPiece {
         let place_settings = make_settings(rotation, &template_name);
         let template_position = make_position(&template_name, position, depth);
         let bounding_box = template.get_bounding_box(&place_settings, template_position);
+        let piece = StructurePiece::new(StructurePieceType::Igloo, bounding_box, 0);
 
         Self {
-            piece: StructurePiece::new(StructurePieceType::Igloo, bounding_box, 0),
+            piece: start::template_piece(piece, bounding_box),
             template,
             template_name,
             place_settings,
             template_position,
         }
+    }
+
+    /// Vanilla `IglooPiece(StructureTemplateManager, CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Option<Self> {
+        let (template_name, template_position) = start::template_fields(tag)?;
+        let template_name = start::minecraft_path(template_name)?.to_string();
+        let template = get_template(&template_name)?;
+        let place_settings = make_settings(
+            start::rotation_from_name(tag.get_string("Rot")?)?,
+            &template_name,
+        );
+        let bounding_box = template.get_bounding_box(&place_settings, template_position);
+        Some(Self {
+            piece: start::template_piece(piece, bounding_box),
+            template,
+            template_name,
+            place_settings,
+            template_position,
+        })
     }
 
     #[expect(clippy::too_many_lines)]
@@ -214,7 +237,7 @@ impl IglooPiece {
                         Block::AIR.default_state,
                     );
                     let below_pos = world_pos - Vector3::new(0, 1, 0);
-                    let mut chest_nbt = pumpkin_nbt::compound::NbtCompound::new();
+                    let mut chest_nbt = NbtCompound::new();
                     chest_nbt.put_string("id", "minecraft:chest".to_string());
                     chest_nbt.put_int("x", below_pos.x);
                     chest_nbt.put_int("y", below_pos.y);
@@ -261,7 +284,7 @@ impl IglooPiece {
                 crate::generation::structure::template::get_block_entity_id(final_block.name);
             if block_entity_nbt.is_some() || block_entity_id.is_some() {
                 let fallback_id = block_entity_id.unwrap_or(final_block.name);
-                let mut placed_nbt = pumpkin_nbt::compound::NbtCompound::new();
+                let mut placed_nbt = NbtCompound::new();
 
                 placed_nbt.put_string("id", fallback_id.to_string());
                 placed_nbt.put_int("x", world_pos.x);
@@ -307,6 +330,18 @@ impl IglooPiece {
 impl StructurePieceBase for IglooPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        start::add_template_save_data(
+            tag,
+            &format!("minecraft:{}", self.template_name),
+            self.template_position,
+        );
+        tag.put_string(
+            "Rot",
+            start::rotation_name(self.place_settings.get_rotation()).to_string(),
+        );
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece

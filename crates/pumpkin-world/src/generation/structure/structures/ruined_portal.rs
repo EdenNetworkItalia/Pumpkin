@@ -4,6 +4,7 @@ use pumpkin_data::{
     Block, BlockId, BlockState, Mirror, Rotation, block_properties::blocks_movement,
     structures::StructureKeys,
 };
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     HeightMap,
     math::{block_box::BlockBox, position::BlockPos, vector3::Vector3},
@@ -14,6 +15,7 @@ use crate::{
     ProtoChunk,
     generation::structure::{
         piece::StructurePieceType,
+        start,
         structures::{
             HeightSampler, StructureGenerator, StructureGeneratorContext, StructurePiece,
             StructurePieceBase, StructurePiecesCollector, StructurePosition, WorldPortalExt,
@@ -63,6 +65,28 @@ pub enum VerticalPlacement {
 }
 
 impl VerticalPlacement {
+    const ALL: [Self; 6] = [
+        Self::OnLandSurface,
+        Self::PartlyBuried,
+        Self::OnOceanFloor,
+        Self::InMountain,
+        Self::Underground,
+        Self::InNether,
+    ];
+
+    /// Vanilla `RuinedPortalPiece.VerticalPlacement.getSerializedName`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::OnLandSurface => "on_land_surface",
+            Self::PartlyBuried => "partly_buried",
+            Self::OnOceanFloor => "on_ocean_floor",
+            Self::InMountain => "in_mountain",
+            Self::Underground => "underground",
+            Self::InNether => "in_nether",
+        }
+    }
+
     #[must_use]
     pub const fn get_heightmap_type(self) -> HeightMap {
         match self {
@@ -426,9 +450,10 @@ impl RuinedPortalPiece {
         let place_settings =
             make_settings(mirror, rotation, vertical_placement, pivot, &properties);
         let bounding_box = template.get_bounding_box(&place_settings, template_position);
+        let piece = StructurePiece::new(StructurePieceType::RuinedPortal, bounding_box, 0);
 
         Self {
-            piece: StructurePiece::new(StructurePieceType::RuinedPortal, bounding_box, 0),
+            piece: start::template_piece(piece, bounding_box),
             template,
             template_name,
             place_settings,
@@ -436,6 +461,38 @@ impl RuinedPortalPiece {
             vertical_placement,
             properties,
         }
+    }
+
+    /// Vanilla `RuinedPortalPiece(StructurePieceSerializationContext, CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Option<Self> {
+        let (template_name, template_position) = start::template_fields(tag)?;
+        let template_name = start::minecraft_path(template_name)?.to_string();
+        let template = get_template(&template_name)?;
+        let vertical_placement = tag.get_string("VerticalPlacement")?;
+        let properties = tag.get_compound("Properties")?;
+        let pivot = Vector3::new(template.size.x / 2, 0, template.size.z / 2);
+        let mut loaded = Self::new(
+            template,
+            template_name,
+            template_position,
+            VerticalPlacement::ALL
+                .into_iter()
+                .find(|placement| placement.name() == vertical_placement)?,
+            RuinedPortalProperties {
+                cold: properties.get_bool("cold")?,
+                mossiness: properties.get_float("mossiness")?,
+                air_pocket: properties.get_bool("air_pocket")?,
+                overgrown: properties.get_bool("overgrown")?,
+                vines: properties.get_bool("vines")?,
+                replace_with_blackstone: properties.get_bool("replace_with_blackstone")?,
+            },
+            start::rotation_from_name(tag.get_string("Rotation")?)?,
+            start::mirror_from_name(tag.get_string("Mirror")?)?,
+            pivot,
+        );
+        loaded.piece = start::template_piece(piece, loaded.piece.bounding_box);
+        Some(loaded)
     }
 
     fn place_blocks(&self, chunk: &mut ProtoChunk, chunk_box: &BlockBox) {
@@ -734,6 +791,37 @@ impl RuinedPortalPiece {
 impl StructurePieceBase for RuinedPortalPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        start::add_template_save_data(
+            tag,
+            &format!("minecraft:{}", self.template_name),
+            self.template_position,
+        );
+        tag.put_string(
+            "Rotation",
+            start::rotation_name(self.place_settings.get_rotation()).to_string(),
+        );
+        tag.put_string(
+            "Mirror",
+            start::mirror_name(self.place_settings.get_mirror()).to_string(),
+        );
+        tag.put_string(
+            "VerticalPlacement",
+            self.vertical_placement.name().to_string(),
+        );
+        let mut properties = NbtCompound::new();
+        properties.put_bool("cold", self.properties.cold);
+        properties.put_float("mossiness", self.properties.mossiness);
+        properties.put_bool("air_pocket", self.properties.air_pocket);
+        properties.put_bool("overgrown", self.properties.overgrown);
+        properties.put_bool("vines", self.properties.vines);
+        properties.put_bool(
+            "replace_with_blackstone",
+            self.properties.replace_with_blackstone,
+        );
+        tag.put_compound("Properties", properties);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece

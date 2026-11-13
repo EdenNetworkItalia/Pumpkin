@@ -14,6 +14,7 @@ use crate::{
         positions::chunk_pos::{get_center_x, get_center_z, start_block_x, start_block_z},
         structure::{
             piece::StructurePieceType,
+            start,
             structures::{
                 StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
                 StructurePiecesCollector, StructurePosition, WorldPortalExt,
@@ -111,7 +112,13 @@ impl StructureGenerator for ShipwreckGenerator {
         let template_name = pool[template_idx];
         let template = get_template(template_name)?;
 
-        let mut piece = ShipwreckPiece::new(template, position, rotation, self.is_beached);
+        let mut piece = ShipwreckPiece::new(
+            template,
+            template_name.to_string(),
+            position,
+            rotation,
+            self.is_beached,
+        );
 
         if piece.is_too_big_to_fit_in_world_gen_region() {
             let bb = piece.piece.bounding_box;
@@ -150,6 +157,7 @@ impl StructureGenerator for ShipwreckGenerator {
 pub struct ShipwreckPiece {
     piece: StructurePiece,
     template: Arc<StructureTemplate>,
+    template_name: String,
     rotation: Rotation,
     template_position: Vector3<i32>,
     is_beached: bool,
@@ -160,6 +168,7 @@ impl ShipwreckPiece {
     #[must_use]
     pub fn new(
         template: Arc<StructureTemplate>,
+        template_name: String,
         position: Vector3<i32>,
         rotation: Rotation,
         is_beached: bool,
@@ -172,14 +181,33 @@ impl ShipwreckPiece {
             template.size,
         );
 
+        let piece = StructurePiece::new(StructurePieceType::Shipwreck, bounding_box, 0);
         Self {
-            piece: StructurePiece::new(StructurePieceType::Shipwreck, bounding_box, 0),
+            piece: start::template_piece(piece, bounding_box),
             template,
+            template_name,
             rotation,
             template_position: position,
             is_beached,
             height_adjusted: false,
         }
+    }
+
+    /// Vanilla `ShipwreckPiece(StructureTemplateManager, CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Option<Self> {
+        let (template_name, template_position) = start::template_fields(tag)?;
+        let template_name = start::minecraft_path(template_name)?.to_string();
+        let mut loaded = Self::new(
+            get_template(&template_name)?,
+            template_name,
+            template_position,
+            start::rotation_from_name(tag.get_string("Rot")?)?,
+            tag.get_bool("isBeached").unwrap_or(false),
+        );
+        loaded.piece = start::template_piece(piece, loaded.piece.bounding_box);
+        loaded.height_adjusted = tag.get_bool("height_adjusted").unwrap_or(false);
+        Some(loaded)
     }
 
     #[must_use]
@@ -247,6 +275,18 @@ impl ShipwreckPiece {
 impl StructurePieceBase for ShipwreckPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        start::add_template_save_data(
+            tag,
+            &format!("minecraft:{}", self.template_name),
+            self.template_position,
+        );
+        tag.put_bool("isBeached", self.is_beached);
+        tag.put_string("Rot", start::rotation_name(self.rotation).to_string());
+        tag.put_bool("height_adjusted", self.height_adjusted);
+        true
     }
 
     fn get_structure_piece(&self) -> &StructurePiece {

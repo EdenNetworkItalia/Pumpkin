@@ -11,10 +11,11 @@
 use std::sync::{Arc, Mutex};
 
 use pumpkin_data::structures::{Structure, StructureKeys, StructureType};
+use pumpkin_data::{Mirror, Rotation};
 use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
 use pumpkin_util::{
     BlockDirection,
-    math::{block_box::BlockBox, position::BlockPos, vector2::Vector2},
+    math::{block_box::BlockBox, position::BlockPos, vector2::Vector2, vector3::Vector3},
 };
 use tracing::{error, warn};
 
@@ -23,7 +24,9 @@ use super::{
     structures::{
         StructurePiece, StructurePieceBase, StructurePiecesCollector, StructurePosition,
         buried_treasure::BuriedTreasurePiece, desert_pyramid::DesertPyramidPiece,
-        jungle_temple::JungleTemplePiece, ocean_monument, swamp_hut::SwampHutPiece,
+        end_city::EndCityTemplatePiece, igloo::IglooPiece, jungle_temple::JungleTemplePiece,
+        mansion, nether_fossil::NetherFossilPiece, ocean_monument, ocean_ruin::OceanRuinPiece,
+        ruined_portal::RuinedPortalPiece, shipwreck::ShipwreckPiece, swamp_hut::SwampHutPiece,
     },
 };
 
@@ -217,6 +220,7 @@ pub fn create_tag(
     let children = collector
         .pieces
         .iter()
+        .filter(|piece| !mansion::is_foundation(piece.as_ref()))
         .map(|piece| create_piece_tag(piece.as_ref()).map(NbtTag::Compound))
         .collect::<Option<Vec<_>>>()?;
     let mut tag = NbtCompound::new();
@@ -266,8 +270,8 @@ pub fn load_start(
         tag.get_int("ChunkZ").unwrap_or(0),
     );
     let children = tag.get_list("Children").unwrap_or_default();
-    let mut collector = if Structure::get(&structure).structure_type == StructureType::OceanMonument
-    {
+    let structure_type = Structure::get(&structure).structure_type;
+    let mut collector = if structure_type == StructureType::OceanMonument {
         let top_piece = children.first()?.extract_compound()?;
         let top_piece = StructurePiece::from_tag(StructurePieceType::OceanMonumentBase, top_piece)?;
         ocean_monument::regenerate_pieces_after_load(chunk_pos, seed, sea_level, &top_piece)
@@ -278,6 +282,9 @@ pub fn load_start(
         }
         collector
     };
+    if structure_type == StructureType::WoodlandMansion {
+        mansion::add_foundation(&mut collector)?;
+    }
     if collector.is_empty() {
         return None;
     }
@@ -302,6 +309,15 @@ fn load_piece(tag: &NbtCompound) -> Option<Box<dyn StructurePieceBase>> {
         StructurePieceType::DesertTemple => Box::new(DesertPyramidPiece::from_tag(piece, tag)),
         StructurePieceType::JungleTemple => Box::new(JungleTemplePiece::from_tag(piece, tag)),
         StructurePieceType::SwampHut => Box::new(SwampHutPiece::from_tag(piece, tag)),
+        StructurePieceType::Igloo => Box::new(IglooPiece::from_tag(piece, tag)?),
+        StructurePieceType::Shipwreck => Box::new(ShipwreckPiece::from_tag(piece, tag)?),
+        StructurePieceType::OceanTemple => Box::new(OceanRuinPiece::from_tag(piece, tag)?),
+        StructurePieceType::NetherFossil => Box::new(NetherFossilPiece::from_tag(piece, tag)?),
+        StructurePieceType::EndCity => Box::new(EndCityTemplatePiece::from_tag(piece, tag)?),
+        StructurePieceType::WoodlandMansion => {
+            Box::new(mansion::MansionTemplatePiece::from_tag(piece, tag)?)
+        }
+        StructurePieceType::RuinedPortal => Box::new(RuinedPortalPiece::from_tag(piece, tag)?),
         _ => return None,
     })
 }
@@ -330,6 +346,75 @@ pub const fn direction_from_2d_data_value(value: i32) -> Option<BlockDirection> 
             _ => BlockDirection::East,
         }),
     }
+}
+
+/// Vanilla `Rotation.LEGACY_CODEC`.
+#[must_use]
+pub const fn rotation_name(rotation: Rotation) -> &'static str {
+    match rotation {
+        Rotation::None => "NONE",
+        Rotation::Clockwise90 => "CLOCKWISE_90",
+        Rotation::Rotate180 => "CLOCKWISE_180",
+        Rotation::CounterClockwise90 => "COUNTERCLOCKWISE_90",
+    }
+}
+
+/// The rotation that vanilla `Rotation.LEGACY_CODEC` writes as `name`.
+#[must_use]
+pub fn rotation_from_name(name: &str) -> Option<Rotation> {
+    Rotation::values()
+        .into_iter()
+        .find(|rotation| rotation_name(*rotation) == name)
+}
+
+/// Vanilla `Mirror.LEGACY_CODEC`.
+#[must_use]
+pub const fn mirror_name(mirror: Mirror) -> &'static str {
+    match mirror {
+        Mirror::None => "NONE",
+        Mirror::LeftRight => "LEFT_RIGHT",
+        Mirror::FrontBack => "FRONT_BACK",
+    }
+}
+
+/// The mirror that vanilla `Mirror.LEGACY_CODEC` writes as `name`.
+#[must_use]
+pub fn mirror_from_name(name: &str) -> Option<Mirror> {
+    Mirror::values()
+        .into_iter()
+        .find(|mirror| mirror_name(*mirror) == name)
+}
+
+/// Vanilla `TemplateStructurePiece.addAdditionalSaveData`.
+pub fn add_template_save_data(
+    tag: &mut NbtCompound,
+    template_name: &str,
+    template_position: Vector3<i32>,
+) {
+    tag.put_int("TPX", template_position.x);
+    tag.put_int("TPY", template_position.y);
+    tag.put_int("TPZ", template_position.z);
+    tag.put_string("Template", template_name.to_string());
+}
+
+/// The template name and position that vanilla `TemplateStructurePiece(CompoundTag)` reads.
+#[must_use]
+pub fn template_fields(tag: &NbtCompound) -> Option<(&str, Vector3<i32>)> {
+    let position = Vector3::new(
+        tag.get_int("TPX").unwrap_or(0),
+        tag.get_int("TPY").unwrap_or(0),
+        tag.get_int("TPZ").unwrap_or(0),
+    );
+    Some((tag.get_string("Template")?, position))
+}
+
+/// Vanilla `TemplateStructurePiece(CompoundTag)` keeps the saved depth, faces north and takes
+/// its box from the template instead of the saved one.
+#[must_use]
+pub const fn template_piece(mut piece: StructurePiece, bounding_box: BlockBox) -> StructurePiece {
+    piece.bounding_box = bounding_box;
+    piece.set_facing(Some(BlockDirection::North));
+    piece
 }
 
 /// Whether the `structures` tag has the `starts` compound, which vanilla always writes.

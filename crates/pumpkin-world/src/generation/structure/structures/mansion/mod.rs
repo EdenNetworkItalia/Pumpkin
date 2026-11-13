@@ -14,6 +14,7 @@ use crate::{
     ProtoChunk,
     generation::structure::{
         piece::StructurePieceType,
+        start,
         structures::{
             StructureGenerator, StructureGeneratorContext, StructurePiece, StructurePieceBase,
             StructurePiecesCollector, StructurePosition,
@@ -103,6 +104,31 @@ impl TemplateMirror {
             Self::FrontBack => Mirror::FrontBack,
         }
     }
+
+    const fn from_state_mirror(mirror: Mirror) -> Self {
+        match mirror {
+            Mirror::None => Self::None,
+            Mirror::LeftRight => Self::LeftRight,
+            Mirror::FrontBack => Self::FrontBack,
+        }
+    }
+}
+
+/// Whether `piece` is the foundation that Pumpkin places as a piece. Vanilla fills it in
+/// `WoodlandMansionStructure.afterPlace`, so a saved mansion has no such piece.
+pub(crate) fn is_foundation(piece: &dyn StructurePieceBase) -> bool {
+    piece.as_any().is::<MansionFoundationPiece>()
+}
+
+/// Adds the foundation below the template pieces of a mansion loaded from chunk data.
+pub(crate) fn add_foundation(collector: &mut StructurePiecesCollector) -> Option<()> {
+    let piece_boxes = collector
+        .pieces
+        .iter()
+        .map(|piece| piece.bounding_box())
+        .collect();
+    collector.add_piece(Box::new(MansionFoundationPiece::new(piece_boxes)?));
+    Some(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,9 +247,10 @@ const fn relative(position: Vector3<i32>, direction: Direction, distance: i32) -
     )
 }
 
-struct MansionTemplatePiece {
+pub(crate) struct MansionTemplatePiece {
     piece: StructurePiece,
     template: Arc<StructureTemplate>,
+    template_name: String,
     template_position: Vector3<i32>,
     rotation: Rotation,
     mirror: TemplateMirror,
@@ -251,13 +278,31 @@ impl MansionTemplatePiece {
             descriptor.position.y + max.y,
             descriptor.position.z + first.z.max(second.z),
         );
+        let piece = StructurePiece::new(StructurePieceType::WoodlandMansion, bounding_box, 0);
         Some(Self {
-            piece: StructurePiece::new(StructurePieceType::WoodlandMansion, bounding_box, 0),
+            piece: start::template_piece(piece, bounding_box),
             template,
+            template_name: descriptor.template.clone(),
             template_position: descriptor.position,
             rotation: descriptor.rotation,
             mirror: descriptor.mirror,
         })
+    }
+
+    /// Vanilla `WoodlandMansionPiece(StructureTemplateManager, CompoundTag)`.
+    pub(crate) fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Option<Self> {
+        let (template_name, position) = start::template_fields(tag)?;
+        let descriptor = PieceDescriptor {
+            template: template_name.to_string(),
+            position,
+            rotation: start::rotation_from_name(tag.get_string("Rot")?)?,
+            mirror: TemplateMirror::from_state_mirror(start::mirror_from_name(
+                tag.get_string("Mi")?,
+            )?),
+        };
+        let mut loaded = Self::new(&descriptor)?;
+        loaded.piece = start::template_piece(piece, loaded.piece.bounding_box);
+        Some(loaded)
     }
 
     const fn world_position(&self, local: Vector3<i32>) -> Vector3<i32> {
@@ -426,6 +471,16 @@ impl MansionTemplatePiece {
 impl StructurePieceBase for MansionTemplatePiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        start::add_template_save_data(tag, &self.template_name, self.template_position);
+        tag.put_string("Rot", start::rotation_name(self.rotation).to_string());
+        tag.put_string(
+            "Mi",
+            start::mirror_name(self.mirror.state_mirror()).to_string(),
+        );
+        true
     }
 
     fn get_structure_piece(&self) -> &StructurePiece {
@@ -615,6 +670,51 @@ mod tests {
             self.calls.push((block_x, block_z));
             self.heights.next().unwrap()
         }
+    }
+
+    /// A saved mansion has only its template pieces. It loads back with the foundation that
+    /// Pumpkin places as a piece, and saves unchanged.
+    #[test]
+    fn saved_mansion_loads_back() {
+        use crate::generation::structure::start;
+        use pumpkin_data::structures::StructureKeys;
+        use pumpkin_util::math::vector2::Vector2;
+
+        let mut sampler = RecordingHeightSampler {
+            calls: Vec::new(),
+            heights: vec![70; 4].into_iter(),
+        };
+        let position = MansionGenerator
+            .get_structure_position(StructureGeneratorContext {
+                seed: 42,
+                chunk_x: 3,
+                chunk_z: -2,
+                random: RandomGenerator::Legacy(LegacyRand::from_seed(42)),
+                sea_level: 63,
+                min_y: -64,
+                height: 384,
+                height_sampler: Some(&mut sampler),
+                structure_key: None,
+            })
+            .unwrap();
+        let generated = position.collector.lock().unwrap();
+        let chunk = Vector2::new(3, -2);
+        let tag = start::create_tag(StructureKeys::Mansion, chunk, &generated).unwrap();
+        let children = tag.get_list("Children").unwrap();
+        assert_eq!(children.len(), generated.pieces.len() - 1);
+
+        let loaded = start::load_start(StructureKeys::Mansion, &tag, 42, 63).unwrap();
+        let loaded = loaded.collector.lock().unwrap();
+        assert_eq!(loaded.pieces.len(), generated.pieces.len());
+        assert!(is_foundation(loaded.pieces.last().unwrap().as_ref()));
+        assert_eq!(
+            loaded.pieces.last().unwrap().bounding_box(),
+            generated.pieces.last().unwrap().bounding_box()
+        );
+        assert_eq!(
+            start::create_tag(StructureKeys::Mansion, chunk, &loaded),
+            Some(tag)
+        );
     }
 
     #[test]

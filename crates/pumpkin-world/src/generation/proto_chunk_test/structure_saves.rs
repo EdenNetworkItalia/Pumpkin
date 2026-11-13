@@ -18,6 +18,7 @@ use pumpkin_util::world_seed::Seed;
 #[derive(serde::Deserialize)]
 struct StructureStartsDump {
     overworld: DimensionDump,
+    the_nether: DimensionDump,
 }
 
 #[derive(serde::Deserialize)]
@@ -112,13 +113,17 @@ fn saved_structures(world_gen: &WorldGenerator, chunk_x: i32, chunk_z: i32) -> N
         .unwrap_or_default()
 }
 
-/// The vanilla dump starts of the structures whose pieces write no fields of their own.
-fn base_only_starts() -> Vec<StartDump> {
-    let dump: StructureStartsDump = serde_json::from_str(include_str!(
+fn dump() -> StructureStartsDump {
+    serde_json::from_str(include_str!(
         "../../../../../assets/tests/structure_starts.json"
     ))
-    .expect("dump parses");
-    dump.overworld
+    .expect("dump parses")
+}
+
+/// The vanilla dump starts of the structures whose pieces write no fields of their own.
+fn base_only_starts() -> Vec<StartDump> {
+    dump()
+        .overworld
         .chunks
         .into_iter()
         .flat_map(|chunk| chunk.starts)
@@ -454,5 +459,212 @@ fn scattered_feature_starts_load_back() {
             &collector,
         );
         assert_eq!(saved_again, Some(tag), "{structure:?}");
+    }
+}
+
+/// `start` without the piece fields in `fields`.
+fn without_piece_fields(start: &NbtCompound, fields: &[&str]) -> NbtCompound {
+    let mut start = start.clone();
+    if let Some(NbtTag::List(children)) = start.child_tags.get_mut("Children") {
+        for child in children {
+            if let NbtTag::Compound(piece) = child {
+                for field in fields {
+                    piece.child_tags.remove(*field);
+                }
+            }
+        }
+    }
+    start
+}
+
+/// Template structure starts are written with the piece fields that vanilla 26.3 writes. The
+/// fixture holds starts that the vanilla server saved for this seed, keyed by structure.
+/// Vanilla saved them after placement, which moves some pieces to the terrain height, and the
+/// generated starts stop before placement, so the fields that placement changes are left out.
+/// The vanilla starts, placement fields included, load back and save unchanged.
+#[test]
+fn template_starts_match_vanilla() {
+    let expected = pumpkin_nbt::nbt_compress::read_gzip_compound_tag(Cursor::new(include_bytes!(
+        "../../../../../assets/tests/template_structure_starts.nbt"
+    )))
+    .expect("fixture parses");
+    let seed = Seed(1_782_124_772_053_846_960);
+    // Vanilla takes a loaded template piece's box from the template, and an igloo restores its
+    // template position after placement but keeps the moved box.
+    for (structure, dimension, chunk_x, chunk_z, placement_fields, reloaded_fields) in [
+        (
+            "minecraft:igloo",
+            Dimension::OVERWORLD,
+            134,
+            -224,
+            &["BB"][..],
+            &["BB"][..],
+        ),
+        (
+            "minecraft:shipwreck",
+            Dimension::OVERWORLD,
+            0,
+            -164,
+            &["BB", "TPY", "height_adjusted"][..],
+            &[][..],
+        ),
+        (
+            "minecraft:shipwreck_beached",
+            Dimension::OVERWORLD,
+            24,
+            -142,
+            &["BB", "TPY", "height_adjusted"][..],
+            &[][..],
+        ),
+        (
+            "minecraft:ocean_ruin_warm",
+            Dimension::OVERWORLD,
+            29,
+            -135,
+            &["BB", "TPY"][..],
+            &[][..],
+        ),
+        (
+            "minecraft:ocean_ruin_cold",
+            Dimension::OVERWORLD,
+            40,
+            -176,
+            &["BB", "TPY"][..],
+            &[][..],
+        ),
+        (
+            "minecraft:end_city",
+            Dimension::THE_END,
+            88,
+            24,
+            &[][..],
+            &[][..],
+        ),
+    ] {
+        let world_gen = get_world_gen(seed, dimension, false, Vec::new(), String::new());
+        let WorldGenerator::Noise(generator) = &*world_gen else {
+            unreachable!()
+        };
+        let mut proto = ProtoChunk::new(chunk_x, chunk_z, &world_gen);
+        proto.step_to_biomes(generator);
+        proto.set_structure_starts(generator);
+        let structures = proto.structure_data();
+        let written = structures
+            .get_compound("starts")
+            .and_then(|starts| starts.get_compound(structure))
+            .map(|start| without_piece_fields(start, placement_fields));
+        let vanilla = expected
+            .get_compound(structure)
+            .expect("fixture has the start");
+        assert_eq!(
+            written,
+            Some(without_piece_fields(vanilla, placement_fields)),
+            "{structure}"
+        );
+
+        let key = StructureKeys::from_name(structure).expect("known structure");
+        let loaded = start::load_start(key, vanilla, seed.0 as i64, generator.settings.sea_level)
+            .expect("the vanilla start loads");
+        let collector = loaded
+            .collector
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved_again = start::create_tag(
+            key,
+            pumpkin_util::math::vector2::Vector2::new(chunk_x, chunk_z),
+            &collector,
+        );
+        assert_eq!(
+            saved_again.map(|start| without_piece_fields(&start, reloaded_fields)),
+            Some(without_piece_fields(vanilla, reloaded_fields)),
+            "{structure} loads back"
+        );
+    }
+}
+
+/// The structure families of the vanilla dump whose own piece fields the dump does not hold.
+const DUMPED_FAMILIES: [&str; 2] = ["minecraft:ruined_portal", "minecraft:nether_fossil"];
+
+/// The first starts of each family in `DUMPED_FAMILIES` and each dimension: the written pieces
+/// have the common fields of the dump, and every start loads back and saves unchanged.
+#[test]
+fn dumped_starts_load_back() {
+    let dump = dump();
+    let mut checked = std::collections::HashMap::<(usize, &str), usize>::new();
+    for (dimension_index, (dimension, dimension_dump)) in [
+        (Dimension::OVERWORLD, dump.overworld),
+        (Dimension::THE_NETHER, dump.the_nether),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let world_gen = get_world_gen(Seed(0), dimension, false, Vec::new(), String::new());
+        let WorldGenerator::Noise(generator) = &*world_gen else {
+            unreachable!()
+        };
+        for start in dimension_dump
+            .chunks
+            .into_iter()
+            .flat_map(|chunk| chunk.starts)
+        {
+            let Some(family) = DUMPED_FAMILIES
+                .into_iter()
+                .find(|family| start.structure.starts_with(family))
+            else {
+                continue;
+            };
+            let count = checked.entry((dimension_index, family)).or_default();
+            if *count == 8 {
+                continue;
+            }
+            *count += 1;
+            let mut proto = ProtoChunk::new(start.chunk_x, start.chunk_z, &world_gen);
+            proto.step_to_biomes(generator);
+            proto.set_structure_starts(generator);
+            let structures = proto.structure_data();
+            let written = structures
+                .get_compound("starts")
+                .and_then(|starts| starts.get_compound(&start.structure))
+                .expect("the start is written");
+            let common = ["id", "BB", "O", "GD"];
+            let own_fields = |start: &NbtCompound| {
+                let mut start = start.clone();
+                if let Some(NbtTag::List(children)) = start.child_tags.get_mut("Children") {
+                    for child in children {
+                        if let NbtTag::Compound(piece) = child {
+                            piece.child_tags.retain(|name, _| common.contains(&&**name));
+                        }
+                    }
+                }
+                start
+            };
+            assert_eq!(
+                own_fields(written),
+                vanilla_start_tag(&start),
+                "{}",
+                start.structure
+            );
+
+            let key = StructureKeys::from_name(&start.structure).expect("known structure");
+            let loaded = start::load_start(key, written, 0, generator.settings.sea_level)
+                .expect("the start loads");
+            let collector = loaded
+                .collector
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let chunk = pumpkin_util::math::vector2::Vector2::new(start.chunk_x, start.chunk_z);
+            assert_eq!(
+                start::create_tag(key, chunk, &collector).as_ref(),
+                Some(written),
+                "{} loads back",
+                start.structure
+            );
+        }
+    }
+    for family in DUMPED_FAMILIES {
+        assert!(
+            checked.keys().any(|(_, checked)| *checked == family),
+            "the dump has no {family} start"
+        );
     }
 }

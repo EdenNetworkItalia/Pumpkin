@@ -1,4 +1,5 @@
 use pumpkin_data::Block;
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{BlockDirection, math::block_box::BlockBox, random::RandomGenerator};
 
 use crate::{
@@ -18,6 +19,13 @@ pub struct CorridorCrossingPiece {
 }
 
 impl CorridorCrossingPiece {
+    /// Vanilla `NetherFortressPieces.CastleSmallCorridorCrossingPiece(CompoundTag)`.
+    #[must_use]
+    pub const fn from_tag(piece: StructurePiece, _tag: &NbtCompound) -> Self {
+        Self {
+            piece: NetherFortressPiece { piece },
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         x: i32,
@@ -45,6 +53,10 @@ impl CorridorCrossingPiece {
 impl StructurePieceBase for CorridorCrossingPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, _tag: &mut NbtCompound) -> bool {
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

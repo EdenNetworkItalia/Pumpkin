@@ -31,6 +31,16 @@ use super::{
         jungle_temple::JungleTemplePiece,
         mansion,
         mineshaft::{MineShaftCorridor, MineShaftCrossing, MineShaftRoom, MineShaftStairs},
+        nether_fortress::{
+            bridge::BridgePiece, bridge_crossing::BridgeCrossingPiece, bridge_end::BridgeEndPiece,
+            bridge_platform::BridgePlatformPiece, bridge_small_crossing::BridgeSmallCrossingPiece,
+            bridge_stairs::BridgeStairsPiece, corridor_balcony::CorridorBalconyPiece,
+            corridor_crossing::CorridorCrossingPiece, corridor_exit::CorridorExitPiece,
+            corridor_left_turn::CorridorLeftTurnPiece,
+            corridor_nether_warts_room::CorridorNetherWartsRoomPiece,
+            corridor_right_turn::CorridorRightTurnPiece, corridor_stairs::CorridorStairsPiece,
+            small_corridor::SmallCorridorPiece,
+        },
         nether_fossil::NetherFossilPiece,
         ocean_monument,
         ocean_ruin::OceanRuinPiece,
@@ -344,6 +354,48 @@ fn load_piece(tag: &NbtCompound) -> Option<Box<dyn StructurePieceBase>> {
         StructurePieceType::MineshaftCorridor => Box::new(MineShaftCorridor::from_tag(piece, tag)),
         StructurePieceType::MineshaftCrossing => Box::new(MineShaftCrossing::from_tag(piece, tag)),
         StructurePieceType::MineshaftStairs => Box::new(MineShaftStairs::from_tag(piece, tag)),
+        // Vanilla `NetherFortressPieces.StartPiece(CompoundTag)` loads as a bridge crossing.
+        StructurePieceType::NetherFortressBridgeCrossing
+        | StructurePieceType::NetherFortressStart => {
+            Box::new(BridgeCrossingPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressBridgeEnd => {
+            Box::new(BridgeEndPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressBridgePlatform => {
+            Box::new(BridgePlatformPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressBridge => Box::new(BridgePiece::from_tag(piece, tag)),
+        StructurePieceType::NetherFortressBridgeSmallCrossing => {
+            Box::new(BridgeSmallCrossingPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressBridgeStairs => {
+            Box::new(BridgeStairsPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressCorridorBalcony => {
+            Box::new(CorridorBalconyPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressCorridorCrossing => {
+            Box::new(CorridorCrossingPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressCorridorExit => {
+            Box::new(CorridorExitPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressCorridorLeftTurn => {
+            Box::new(CorridorLeftTurnPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressCorridorNetherWartsRoom => {
+            Box::new(CorridorNetherWartsRoomPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressCorridorRightTurn => {
+            Box::new(CorridorRightTurnPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressCorridorStairs => {
+            Box::new(CorridorStairsPiece::from_tag(piece, tag))
+        }
+        StructurePieceType::NetherFortressSmallCorridor => {
+            Box::new(SmallCorridorPiece::from_tag(piece, tag))
+        }
         _ => return None,
     })
 }

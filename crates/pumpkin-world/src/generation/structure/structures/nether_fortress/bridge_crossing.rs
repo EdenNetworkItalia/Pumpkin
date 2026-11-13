@@ -1,4 +1,5 @@
 use pumpkin_data::Block;
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -24,6 +25,13 @@ pub struct BridgeCrossingPiece {
 }
 
 impl BridgeCrossingPiece {
+    /// Vanilla `NetherFortressPieces.BridgeCrossing(CompoundTag)`.
+    #[must_use]
+    pub const fn from_tag(piece: StructurePiece, _tag: &NbtCompound) -> Self {
+        Self {
+            piece: NetherFortressPiece { piece },
+        }
+    }
     /// Create as the very first (start) piece at a fixed y=64.
     pub fn new_start(random: &mut impl RandomImpl, x: i32, z: i32) -> Self {
         let orientation = BlockDirection::get_random_horizontal_direction(random);
@@ -61,6 +69,10 @@ impl BridgeCrossingPiece {
 impl StructurePieceBase for BridgeCrossingPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, _tag: &mut NbtCompound) -> bool {
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

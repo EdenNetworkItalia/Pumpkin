@@ -21,6 +21,14 @@ pub struct BridgePlatformPiece {
 }
 
 impl BridgePlatformPiece {
+    /// Vanilla `NetherFortressPieces.MonsterThrone(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece: NetherFortressPiece { piece },
+            has_blaze_spawner: tag.get_bool("Mob").unwrap_or(false),
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         x: i32,
@@ -51,6 +59,11 @@ impl BridgePlatformPiece {
 impl StructurePieceBase for BridgePlatformPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        tag.put_bool("Mob", self.has_blaze_spawner);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

@@ -1,4 +1,5 @@
 use pumpkin_data::{Block, block_properties::OakFenceLikeProperties};
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -23,6 +24,14 @@ pub struct CorridorRightTurnPiece {
 }
 
 impl CorridorRightTurnPiece {
+    /// Vanilla `NetherFortressPieces.CastleSmallCorridorRightTurnPiece(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece: NetherFortressPiece { piece },
+            contains_chest: tag.get_bool("Chest").unwrap_or(false),
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         random: &mut impl RandomImpl,
@@ -55,6 +64,11 @@ impl CorridorRightTurnPiece {
 impl StructurePieceBase for CorridorRightTurnPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        tag.put_bool("Chest", self.contains_chest);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

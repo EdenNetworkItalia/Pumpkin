@@ -1,4 +1,5 @@
 use pumpkin_data::{Block, block_properties::OakFenceLikeProperties};
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -23,6 +24,13 @@ pub struct BridgePiece {
 }
 
 impl BridgePiece {
+    /// Vanilla `NetherFortressPieces.BridgeStraight(CompoundTag)`.
+    #[must_use]
+    pub const fn from_tag(piece: StructurePiece, _tag: &NbtCompound) -> Self {
+        Self {
+            piece: NetherFortressPiece { piece },
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         _random: &mut impl RandomImpl,
@@ -49,6 +57,10 @@ impl BridgePiece {
 impl StructurePieceBase for BridgePiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, _tag: &mut NbtCompound) -> bool {
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

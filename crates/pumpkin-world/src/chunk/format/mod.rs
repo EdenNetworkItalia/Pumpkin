@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use crate::generation::structure::start::SavedStructures;
 use bytes::{Buf, BufMut, Bytes};
 use pumpkin_data::{Block, BlockId, BlockStateId, chunk::ChunkStatus, fluid::Fluid};
 use pumpkin_nbt::compound::NbtCompound;
@@ -501,10 +502,13 @@ impl ChunkData {
             .or_else(|| root_tag.get_compound("BukkitValues"))
             .cloned()
             .unwrap_or_default();
-        let structures = root_tag
-            .get_compound("structures")
-            .cloned()
-            .unwrap_or_default();
+        let structures = SavedStructures::read(
+            root_tag
+                .get_compound("structures")
+                .cloned()
+                .unwrap_or_default(),
+            position,
+        );
 
         Ok(Self {
             section,
@@ -726,8 +730,8 @@ impl ChunkData {
         if !custom_data.is_empty() {
             root_compound.put_compound("PumpkinCustomData", custom_data.clone());
         }
-        if !self.structures.is_empty() {
-            root_compound.put_compound("structures", self.structures.clone());
+        if !self.structures.tag.is_empty() {
+            root_compound.put_compound("structures", self.structures.tag.clone());
         }
 
         let nbt = pumpkin_nbt::Nbt::from(root_compound);
@@ -797,7 +801,7 @@ impl ChunkData {
         if has_custom {
             flags |= 1 << 4;
         }
-        let has_structures = !self.structures.is_empty();
+        let has_structures = !self.structures.tag.is_empty();
         if has_structures {
             flags |= 1 << 5;
         }
@@ -902,7 +906,7 @@ impl ChunkData {
 
         if has_structures {
             let bytes =
-                pumpkin_nbt::Nbt::new(String::new(), self.structures.clone()).write_unnamed();
+                pumpkin_nbt::Nbt::new(String::new(), self.structures.tag.clone()).write_unnamed();
             out.put_u32(bytes.len() as u32);
             out.extend_from_slice(&bytes);
         }
@@ -1157,7 +1161,10 @@ impl ChunkData {
         }
 
         let custom_data = read_pump_compound(&mut buf, (flags & (1 << 4)) != 0, "custom data")?;
-        let structures = read_pump_compound(&mut buf, (flags & (1 << 5)) != 0, "structures")?;
+        let structures = SavedStructures::read(
+            read_pump_compound(&mut buf, (flags & (1 << 5)) != 0, "structures")?,
+            position,
+        );
 
         Ok(Self {
             section,

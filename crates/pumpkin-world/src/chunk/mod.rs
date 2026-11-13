@@ -1,4 +1,5 @@
 use crate::chunk::format::LightContainer;
+use crate::generation::structure::start::SavedStructures;
 use crate::tick::scheduler::ChunkTickScheduler;
 use palette::{BiomePalette, BlockPalette, has_random_ticking_fluid};
 use pumpkin_data::block_properties::{blocks_movement, has_random_ticks, is_air};
@@ -83,8 +84,8 @@ pub struct ChunkData {
     pub inhabited_time: AtomicU64,
     pub custom_data: std::sync::Mutex<NbtCompound>,
     /// The vanilla `structures` tag: the structure starts this chunk owns and the references
-    /// to the starts whose bounding box reaches into it. Empty when the chunk has none.
-    pub structures: NbtCompound,
+    /// to the starts whose bounding box reaches into it.
+    pub structures: SavedStructures,
 }
 
 pub struct ChunkEntityData {
@@ -648,7 +649,7 @@ impl ChunkData {
             dirty: std::sync::atomic::AtomicBool::new(false),
             inhabited_time: std::sync::atomic::AtomicU64::new(0),
             custom_data: std::sync::Mutex::new(NbtCompound::new()),
-            structures: NbtCompound::new(),
+            structures: SavedStructures::default(),
         }
     }
 

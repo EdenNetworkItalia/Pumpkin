@@ -407,7 +407,7 @@ impl ProtoChunk {
         if saved_stage >= StagedChunkEnum::StructureStart {
             proto_chunk
                 .saved_structures
-                .clone_from(&chunk_data.structures);
+                .clone_from(&chunk_data.structures.tag);
         }
         if let super::generator::WorldGenerator::Noise(generator) = generator
             && (StagedChunkEnum::StructureStart..StagedChunkEnum::Features).contains(&saved_stage)

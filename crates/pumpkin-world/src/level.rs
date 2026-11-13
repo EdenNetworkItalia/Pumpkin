@@ -1,4 +1,6 @@
-use crate::chunk_system::{ChunkListener, ChunkLoading, GenerationSchedule, LevelChannel};
+use crate::chunk_system::{
+    ChunkListener, ChunkLoading, GenerationSchedule, LevelChannel, StagedChunkEnum,
+};
 use crate::generation::generator::WorldGenerator;
 use crate::lighting::DynamicLightEngine;
 use crate::{
@@ -19,7 +21,9 @@ use crossbeam::queue::SegQueue;
 use dashmap::{DashMap, Entry};
 use pumpkin_config::{chunk::ChunkConfig, lighting::LightingEngineConfig, world::LevelConfig};
 use pumpkin_data::biome::Biome;
+use pumpkin_data::chunk::ChunkStatus;
 use pumpkin_data::dimension::Dimension;
+use pumpkin_data::structures::StructureKeys;
 use pumpkin_data::{Block, BlockStateId, block_properties::has_random_ticks, fluid::Fluid};
 use pumpkin_util::math::{position::BlockPos, vector2::Vector2};
 use pumpkin_util::world_seed::Seed;
@@ -942,6 +946,70 @@ impl Level {
         self.loaded_chunks.get(coordinates).map(|x| f(x.value()))
     }
 
+    /// Whether a piece of one of the `wanted` structures covers `pos`: vanilla
+    /// `StructureManager.getStructureWithPieceAt` and `structureHasPieceAt`.
+    ///
+    /// Like vanilla, it reads the `References` of the chunk that holds `pos`, which name every
+    /// start that reaches the chunk, and then the piece boxes of each referenced start in its
+    /// start chunk. A referenced start that is not in a loaded start chunk falls back to the
+    /// generator, which recomputes the starts; vanilla would load the start chunk. A chunk saved
+    /// without `References` falls back as a whole.
+    #[must_use]
+    pub fn has_structure_piece_at(&self, pos: BlockPos, wanted: &[StructureKeys]) -> bool {
+        let chunk_pos = pos.chunk_position();
+        let chunk = self.saved_structure_chunk(chunk_pos, ChunkStatus::StructureReferences);
+        let Some(references) = chunk
+            .as_ref()
+            .and_then(|chunk| chunk.structures.references.as_ref())
+        else {
+            return self.world_gen.load().has_structure_piece_at(pos, wanted);
+        };
+        let mut recompute = Vec::new();
+        for &(structure, start_pos) in references
+            .iter()
+            .filter(|(structure, _)| wanted.contains(structure))
+        {
+            let start_chunk = self.saved_structure_chunk(start_pos, ChunkStatus::StructureStarts);
+            let pieces = start_chunk.as_ref().and_then(|start_chunk| {
+                start_chunk
+                    .structures
+                    .starts
+                    .as_ref()?
+                    .iter()
+                    .find(|(saved, _)| *saved == structure)
+            });
+            match pieces {
+                Some((_, pieces)) => {
+                    if pieces.iter().any(|piece| piece.contains_pos(&pos.0)) {
+                        return true;
+                    }
+                }
+                None => {
+                    if !recompute.contains(&structure) {
+                        recompute.push(structure);
+                    }
+                }
+            }
+        }
+        !recompute.is_empty()
+            && self
+                .world_gen
+                .load()
+                .has_structure_piece_at(pos, &recompute)
+    }
+
+    /// The loaded chunk at `pos` if its `structures` tag holds the data of `status`: vanilla
+    /// writes the tag at every status, and it is empty before the structure stages.
+    fn saved_structure_chunk(&self, pos: Vector2<i32>, status: ChunkStatus) -> Option<SyncChunk> {
+        let chunk = self.loaded_chunks.get(&pos)?.clone();
+        let has_data = match status {
+            ChunkStatus::StructureStarts => chunk.structures.starts.is_some(),
+            _ => chunk.structures.references.is_some(),
+        };
+        (has_data && StagedChunkEnum::from(chunk.status) >= StagedChunkEnum::from(status))
+            .then_some(chunk)
+    }
+
     pub fn read_entity_chunk_sync<R, F: Fn(&SyncEntityChunk) -> R>(
         &self,
         coordinates: &Vector2<i32>,
@@ -1081,7 +1149,9 @@ impl Level {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::structure::start;
     use pumpkin_config::world::LevelConfig;
+    use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1114,6 +1184,152 @@ mod tests {
         assert_eq!(
             end_level.level_folder.dim_folder,
             root.join("dimensions").join("minecraft").join("the_end")
+        );
+    }
+
+    /// A loaded Full chunk at `pos` with `structures` as its `structures` tag.
+    fn load_chunk(level: &Level, pos: Vector2<i32>, structures: NbtCompound) {
+        let chunk = ChunkData {
+            structures: start::SavedStructures::read(structures, pos),
+            ..ChunkData::empty(pos.x, pos.y)
+        };
+        level.loaded_chunks.insert(pos, Arc::new(chunk));
+    }
+
+    fn structures_tag(starts: NbtCompound, references: NbtCompound) -> NbtCompound {
+        let mut structures = NbtCompound::new();
+        structures.put_compound("starts", starts);
+        structures.put_compound("References", references);
+        structures
+    }
+
+    /// A start of `structure` owned by `chunk` with one piece in `bb`. The lookup reads only
+    /// the piece boxes.
+    fn saved_start(structure: &str, chunk: Vector2<i32>, bb: [i32; 6]) -> NbtCompound {
+        let mut piece = NbtCompound::new();
+        piece.put("BB", NbtTag::IntArray(bb.to_vec()));
+        let mut start = NbtCompound::new();
+        start.put_string("id", structure.to_string());
+        start.put_int("ChunkX", chunk.x);
+        start.put_int("ChunkZ", chunk.y);
+        start.put_int("references", 0);
+        start.put_list("Children", vec![NbtTag::Compound(piece)]);
+        let mut starts = NbtCompound::new();
+        starts.put_compound(structure, start);
+        starts
+    }
+
+    fn references_to(structure: &str, starts: &[Vector2<i32>]) -> NbtCompound {
+        let mut references = NbtCompound::new();
+        references.put(
+            structure,
+            NbtTag::LongArray(
+                starts
+                    .iter()
+                    .map(|start| start::pack_chunk_pos(start.x, start.y))
+                    .collect(),
+            ),
+        );
+        references
+    }
+
+    /// The `structures` tags of the loaded chunks decide a structure that they name, and the
+    /// generator decides the others.
+    #[tokio::test]
+    async fn structure_piece_lookup_reads_saved_structures_first() {
+        let temp_dir = TempDir::new().unwrap();
+        let level = Level::from_root_folder(
+            &LevelConfig::default(),
+            temp_dir.path().to_path_buf(),
+            0,
+            Dimension::OVERWORLD,
+        );
+        let treasure = [StructureKeys::BuriedTreasure];
+        let hut = [StructureKeys::SwampHut];
+
+        // Seed 0 has a buried treasure start at chunk -70 2 with one piece at this block.
+        let in_treasure = BlockPos::new(-1111, 90, 41);
+        let treasure_chunk = in_treasure.chunk_position();
+        load_chunk(&level, treasure_chunk, NbtCompound::new());
+        assert!(
+            level.has_structure_piece_at(in_treasure, &treasure),
+            "a chunk without the tag falls back to the generator"
+        );
+        load_chunk(
+            &level,
+            treasure_chunk,
+            structures_tag(NbtCompound::new(), NbtCompound::new()),
+        );
+        assert!(
+            !level.has_structure_piece_at(in_treasure, &treasure),
+            "the saved references name every start that reaches the chunk"
+        );
+        load_chunk(
+            &level,
+            treasure_chunk,
+            structures_tag(
+                NbtCompound::new(),
+                references_to("minecraft:buried_treasure", &[treasure_chunk]),
+            ),
+        );
+        assert!(
+            level.has_structure_piece_at(in_treasure, &treasure),
+            "a start that its start chunk does not hold falls back to the generator"
+        );
+        load_chunk(
+            &level,
+            treasure_chunk,
+            structures_tag(
+                saved_start(
+                    "minecraft:buried_treasure",
+                    treasure_chunk,
+                    [-1111, 40, 41, -1111, 40, 41],
+                ),
+                references_to("minecraft:buried_treasure", &[treasure_chunk]),
+            ),
+        );
+        assert!(
+            !level.has_structure_piece_at(in_treasure, &treasure),
+            "a saved start decides over the generator"
+        );
+
+        // The generator has no swamp hut here, the saved tags do.
+        let in_hut = BlockPos::new(16_005, 70, 16_005);
+        let hut_chunk = in_hut.chunk_position();
+        let start_chunk = Vector2::new(hut_chunk.x + 1, hut_chunk.y);
+        assert!(!level.world_gen.load().has_structure_piece_at(in_hut, &hut));
+        load_chunk(
+            &level,
+            hut_chunk,
+            structures_tag(
+                NbtCompound::new(),
+                references_to("minecraft:swamp_hut", &[start_chunk]),
+            ),
+        );
+        assert!(
+            !level.has_structure_piece_at(in_hut, &hut),
+            "a start chunk that is not loaded falls back to the generator"
+        );
+        load_chunk(
+            &level,
+            start_chunk,
+            structures_tag(
+                saved_start(
+                    "minecraft:swamp_hut",
+                    start_chunk,
+                    [16_000, 64, 16_000, 16_020, 72, 16_010],
+                ),
+                NbtCompound::new(),
+            ),
+        );
+        assert!(level.has_structure_piece_at(in_hut, &hut));
+        assert!(
+            !level.has_structure_piece_at(BlockPos::new(16_005, 80, 16_005), &hut),
+            "only the piece boxes count"
+        );
+        assert!(
+            !level.has_structure_piece_at(in_hut, &treasure),
+            "only the wanted structures count"
         );
     }
 

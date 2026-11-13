@@ -319,7 +319,10 @@ fn structures_tag_survives_proto_chunk_resume() {
     ] {
         let chunk_data = ChunkData {
             status,
-            structures: structures.clone(),
+            structures: crate::generation::structure::start::SavedStructures::read(
+                structures.clone(),
+                pumpkin_util::math::vector2::Vector2::new(0, 0),
+            ),
             ..ChunkData::empty(0, 0)
         };
         let resumed = ProtoChunk::from_chunk_data(&chunk_data, &world_gen);
@@ -333,6 +336,6 @@ fn structures_tag_survives_proto_chunk_resume() {
         } else {
             NbtCompound::new()
         };
-        assert_eq!(saved.structures, expected, "{status:?}");
+        assert_eq!(saved.structures.tag, expected, "{status:?}");
     }
 }

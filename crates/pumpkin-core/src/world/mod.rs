@@ -6539,10 +6539,7 @@ impl World {
             .iter()
             .filter_map(|name| pumpkin_data::structures::StructureKeys::from_name(name))
             .collect();
-        self.level
-            .world_gen
-            .load()
-            .has_structure_piece_at(pos, &wanted)
+        self.level.has_structure_piece_at(pos, &wanted)
     }
 
     /// A random living player in this world.

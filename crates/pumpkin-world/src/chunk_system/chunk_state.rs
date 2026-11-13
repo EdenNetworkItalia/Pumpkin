@@ -3,10 +3,12 @@ use crate::chunk::{
     palette::{BiomePalette, BlockPalette},
 };
 use crate::generation::biome_coords;
+use crate::generation::structure::start::SavedStructures;
 use crate::tick::scheduler::ChunkTickScheduler;
 use pumpkin_config::lighting::LightingEngineConfig;
 use pumpkin_data::BlockStateId;
 use pumpkin_data::dimension::Dimension;
+use pumpkin_util::math::vector2::Vector2;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -289,7 +291,7 @@ impl Chunk {
                 dirty: AtomicBool::new(false),
                 inhabited_time: AtomicU64::new(0),
                 custom_data: Mutex::new(NbtCompound::new()),
-                structures: NbtCompound::new(),
+                structures: SavedStructures::default(),
             })),
         ) {
             Self::Proto(proto) => proto,
@@ -298,7 +300,10 @@ impl Chunk {
 
         let proto_chunk = *proto_chunk_box;
 
-        let structures = proto_chunk.structure_data();
+        let structures = SavedStructures::read(
+            proto_chunk.structure_data(),
+            Vector2::new(proto_chunk.x, proto_chunk.z),
+        );
         let sections = Self::build_level_sections(&proto_chunk, dimension);
         let heightmaps = Self::build_level_heightmaps(&proto_chunk, dimension.min_y);
 

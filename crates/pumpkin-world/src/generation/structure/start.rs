@@ -46,6 +46,14 @@ use super::{
         ocean_ruin::OceanRuinPiece,
         ruined_portal::RuinedPortalPiece,
         shipwreck::ShipwreckPiece,
+        stronghold::{
+            StrongholdPiece, chest_corridor::ChestCorridorPiece, corridor::CorridorPiece,
+            corridor::SmallCorridorPiece as FillerCorridorPiece,
+            five_way_crossing::FiveWayCrossingPiece, left_turn::LeftTurnPiece,
+            library::LibraryPiece, portal_room::PortalRoomPiece, prison_hall::PrisonHallPiece,
+            right_turn::RightTurnPiece, spiral_staircase::SpiralStaircasePiece,
+            square_room::SquareRoomPiece, stairs::StairsPiece,
+        },
         swamp_hut::SwampHutPiece,
     },
 };
@@ -328,6 +336,7 @@ pub fn load_start(
 }
 
 /// Vanilla `StructurePieceType.load` for the piece types that Pumpkin can load.
+#[expect(clippy::too_many_lines, reason = "one arm per vanilla piece type")]
 fn load_piece(tag: &NbtCompound) -> Option<Box<dyn StructurePieceBase>> {
     let id = tag.get_string("id").unwrap_or_default();
     let Some(piece_type) = StructurePieceType::from_id(id) else {
@@ -354,6 +363,56 @@ fn load_piece(tag: &NbtCompound) -> Option<Box<dyn StructurePieceBase>> {
         StructurePieceType::MineshaftCorridor => Box::new(MineShaftCorridor::from_tag(piece, tag)),
         StructurePieceType::MineshaftCrossing => Box::new(MineShaftCrossing::from_tag(piece, tag)),
         StructurePieceType::MineshaftStairs => Box::new(MineShaftStairs::from_tag(piece, tag)),
+        StructurePieceType::StrongholdChestCorridor => Box::new(ChestCorridorPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdCorridor => Box::new(CorridorPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdSmallCorridor => Box::new(FillerCorridorPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdFiveWayCrossing => Box::new(FiveWayCrossingPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdLeftTurn => Box::new(LeftTurnPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdLibrary => Box::new(LibraryPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdPortalRoom => Box::new(PortalRoomPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdPrisonHall => Box::new(PrisonHallPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdRightTurn => Box::new(RightTurnPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdSquareRoom => Box::new(SquareRoomPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdStairs => Box::new(StairsPiece::from_tag(
+            StrongholdPiece::from_tag(piece, tag)?,
+            tag,
+        )),
+        StructurePieceType::StrongholdSpiralStaircase | StructurePieceType::StrongholdStart => {
+            Box::new(SpiralStaircasePiece::from_tag(
+                StrongholdPiece::from_tag(piece, tag)?,
+                tag,
+            ))
+        }
         // Vanilla `NetherFortressPieces.StartPiece(CompoundTag)` loads as a bridge crossing.
         StructurePieceType::NetherFortressBridgeCrossing
         | StructurePieceType::NetherFortressStart => {

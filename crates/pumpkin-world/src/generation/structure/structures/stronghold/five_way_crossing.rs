@@ -4,6 +4,7 @@ use pumpkin_data::{
         HorizontalFacing, SlabType, WallTorchLikeProperties, WhiteWoolSlabLikeProperties,
     },
 };
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -35,6 +36,17 @@ pub struct FiveWayCrossingPiece {
 }
 
 impl FiveWayCrossingPiece {
+    /// Vanilla `StrongholdPieces.FiveCrossing(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StrongholdPiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            lower_left_exists: tag.get_bool("leftLow").unwrap_or(false),
+            upper_left_exists: tag.get_bool("leftHigh").unwrap_or(false),
+            lower_right_exists: tag.get_bool("rightLow").unwrap_or(false),
+            upper_right_exists: tag.get_bool("rightHigh").unwrap_or(false),
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         random: &mut impl RandomImpl,
@@ -95,6 +107,15 @@ impl FiveWayCrossingPiece {
 impl StructurePieceBase for FiveWayCrossingPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        tag.put_bool("leftLow", self.lower_left_exists);
+        tag.put_bool("leftHigh", self.upper_left_exists);
+        tag.put_bool("rightLow", self.lower_right_exists);
+        tag.put_bool("rightHigh", self.upper_right_exists);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

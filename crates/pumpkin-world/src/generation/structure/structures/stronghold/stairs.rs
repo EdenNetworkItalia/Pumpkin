@@ -2,6 +2,7 @@ use pumpkin_data::{
     Block, BlockState,
     block_properties::{HorizontalFacing, WhiteWoolStairsLikeProperties},
 };
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -24,6 +25,11 @@ pub struct StairsPiece {
 }
 
 impl StairsPiece {
+    /// Vanilla `StrongholdPieces.StraightStairsDown(CompoundTag)`.
+    #[must_use]
+    pub const fn from_tag(piece: StrongholdPiece, _tag: &NbtCompound) -> Self {
+        Self { piece }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         random: &mut impl RandomImpl,
@@ -56,6 +62,11 @@ impl StairsPiece {
 impl StructurePieceBase for StairsPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

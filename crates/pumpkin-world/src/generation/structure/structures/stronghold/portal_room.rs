@@ -31,6 +31,14 @@ pub struct PortalRoomPiece {
 }
 
 impl PortalRoomPiece {
+    /// Vanilla `StrongholdPieces.PortalRoom(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StrongholdPiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            spawner_placed: tag.get_bool("Mob").unwrap_or(false),
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         _random: &mut impl RandomImpl,
@@ -65,6 +73,12 @@ impl PortalRoomPiece {
 impl StructurePieceBase for PortalRoomPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        tag.put_bool("Mob", self.spawner_placed);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

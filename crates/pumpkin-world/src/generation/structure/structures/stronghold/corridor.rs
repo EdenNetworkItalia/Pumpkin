@@ -2,6 +2,7 @@ use pumpkin_data::{
     Block, BlockState,
     block_properties::{HorizontalFacing, WallTorchLikeProperties},
 };
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -31,6 +32,15 @@ pub struct CorridorPiece {
 }
 
 impl CorridorPiece {
+    /// Vanilla `StrongholdPieces.Straight(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StrongholdPiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            left_exit: tag.get_bool("Left").unwrap_or(false),
+            right_exit: tag.get_bool("Right").unwrap_or(false),
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         random: &mut impl RandomImpl,
@@ -87,6 +97,13 @@ impl CorridorPiece {
 impl StructurePieceBase for CorridorPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        tag.put_bool("Left", self.left_exit);
+        tag.put_bool("Right", self.right_exit);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece
@@ -153,6 +170,14 @@ pub struct SmallCorridorPiece {
 }
 
 impl SmallCorridorPiece {
+    /// Vanilla `StrongholdPieces.FillerCorridor(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StrongholdPiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            length: tag.get_int("Steps").unwrap_or(0),
+        }
+    }
     #[must_use]
     pub const fn new(chain_length: u32, bbox: BlockBox, orientation: BlockDirection) -> Self {
         let length = match orientation {
@@ -216,6 +241,12 @@ impl SmallCorridorPiece {
 impl StructurePieceBase for SmallCorridorPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        tag.put_int("Steps", self.length);
+        true
     }
     fn get_structure_piece(&self) -> &crate::generation::structure::structures::StructurePiece {
         &self.piece.piece

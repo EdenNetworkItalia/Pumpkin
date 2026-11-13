@@ -656,11 +656,12 @@ fn template_starts_match_vanilla() {
 }
 
 /// The structure families of the vanilla dump whose own piece fields the dump does not hold.
-const DUMPED_FAMILIES: [&str; 4] = [
+const DUMPED_FAMILIES: [&str; 5] = [
     "minecraft:ruined_portal",
     "minecraft:nether_fossil",
     "minecraft:mineshaft",
     "minecraft:fortress",
+    "minecraft:stronghold",
 ];
 
 /// The first starts of each family in `DUMPED_FAMILIES` and each dimension: the written pieces

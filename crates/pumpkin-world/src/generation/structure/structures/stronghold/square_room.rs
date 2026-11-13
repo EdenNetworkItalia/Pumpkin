@@ -2,6 +2,7 @@ use pumpkin_data::{
     Block, BlockState,
     block_properties::{HorizontalFacing, LadderLikeProperties, WallTorchLikeProperties},
 };
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -31,6 +32,14 @@ pub struct SquareRoomPiece {
 }
 
 impl SquareRoomPiece {
+    /// Vanilla `StrongholdPieces.RoomCrossing(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StrongholdPiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            room_type: tag.get_int("Type").unwrap_or(0) as u32,
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         random: &mut impl RandomImpl,
@@ -67,6 +76,12 @@ impl SquareRoomPiece {
 impl StructurePieceBase for SquareRoomPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        tag.put_int("Type", self.room_type as i32);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

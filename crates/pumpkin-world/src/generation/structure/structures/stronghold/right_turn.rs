@@ -1,4 +1,5 @@
 use pumpkin_data::Block;
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -23,6 +24,11 @@ pub struct RightTurnPiece {
 }
 
 impl RightTurnPiece {
+    /// Vanilla `StrongholdPieces.RightTurn(CompoundTag)`.
+    #[must_use]
+    pub const fn from_tag(piece: StrongholdPiece, _tag: &NbtCompound) -> Self {
+        Self { piece }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         random: &mut impl RandomImpl,
@@ -56,6 +62,11 @@ impl RightTurnPiece {
 impl StructurePieceBase for RightTurnPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

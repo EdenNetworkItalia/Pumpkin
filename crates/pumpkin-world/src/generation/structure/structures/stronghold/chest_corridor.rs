@@ -1,4 +1,5 @@
 use pumpkin_data::Block;
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -24,6 +25,14 @@ pub struct ChestCorridorPiece {
 }
 
 impl ChestCorridorPiece {
+    /// Vanilla `StrongholdPieces.ChestCorridor(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StrongholdPiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            chest_generated: tag.get_bool("Chest").unwrap_or(false),
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         random: &mut impl RandomImpl,
@@ -59,6 +68,12 @@ impl ChestCorridorPiece {
 impl StructurePieceBase for ChestCorridorPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        tag.put_bool("Chest", self.chest_generated);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

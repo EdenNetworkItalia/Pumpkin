@@ -4,6 +4,7 @@ use pumpkin_data::{
         HorizontalFacing, LadderLikeProperties, OakFenceLikeProperties, WallTorchLikeProperties,
     },
 };
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -27,6 +28,14 @@ pub struct LibraryPiece {
 }
 
 impl LibraryPiece {
+    /// Vanilla `StrongholdPieces.Library(CompoundTag)`.
+    #[must_use]
+    pub fn from_tag(piece: StrongholdPiece, tag: &NbtCompound) -> Self {
+        Self {
+            piece,
+            tall: tag.get_bool("Tall").unwrap_or(false),
+        }
+    }
     pub fn create(
         collector: &mut StructurePiecesCollector,
         random: &mut impl RandomImpl,
@@ -66,6 +75,12 @@ impl LibraryPiece {
 impl StructurePieceBase for LibraryPiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        tag.put_bool("Tall", self.tall);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece

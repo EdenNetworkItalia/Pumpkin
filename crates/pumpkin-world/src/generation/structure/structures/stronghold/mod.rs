@@ -7,6 +7,7 @@ use pumpkin_data::{
         OakFenceLikeProperties,
     },
 };
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::{block_box::BlockBox, position::BlockPos},
@@ -136,6 +137,18 @@ pub enum EntranceType {
 }
 
 impl EntranceType {
+    const ALL: [Self; 4] = [Self::Opening, Self::WoodDoor, Self::Grates, Self::IronDoor];
+
+    /// Vanilla `StrongholdPiece.SmallDoorType.LEGACY_CODEC`.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Opening => "OPENING",
+            Self::WoodDoor => "WOOD_DOOR",
+            Self::Grates => "GRATES",
+            Self::IronDoor => "IRON_DOOR",
+        }
+    }
+
     pub fn get_random(random: &mut impl RandomImpl) -> Self {
         match random.next_bounded_i32(5) {
             2 => Self::WoodDoor,
@@ -253,6 +266,24 @@ pub struct StrongholdPiece {
 }
 
 impl StrongholdPiece {
+    /// Vanilla `StrongholdPiece(StructurePieceType, CompoundTag)`: a piece without its entry door
+    /// does not load.
+    #[must_use]
+    pub fn from_tag(piece: StructurePiece, tag: &NbtCompound) -> Option<Self> {
+        let entry_door = tag.get_string("EntryDoor")?;
+        Some(Self {
+            piece,
+            entry_door: EntranceType::ALL
+                .into_iter()
+                .find(|door| door.name() == entry_door)?,
+        })
+    }
+
+    /// Vanilla `StrongholdPiece.addAdditionalSaveData`.
+    pub fn add_additional_save_data(&self, tag: &mut NbtCompound) {
+        tag.put_string("EntryDoor", self.entry_door.name().to_string());
+    }
+
     #[must_use]
     pub const fn new(r#type: StructurePieceType, chain_length: u32, bbox: BlockBox) -> Self {
         Self {

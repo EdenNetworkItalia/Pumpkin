@@ -1,4 +1,5 @@
 use pumpkin_data::Block;
+use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::{
     BlockDirection,
     math::block_box::BlockBox,
@@ -30,6 +31,19 @@ pub struct SpiralStaircasePiece {
 }
 
 impl SpiralStaircasePiece {
+    /// Vanilla `StrongholdPieces.StairsDown(CompoundTag)`, which `StartPiece(CompoundTag)` uses
+    /// too. Vanilla does not save the generation state of the start.
+    #[must_use]
+    pub fn from_tag(piece: StrongholdPiece, tag: &NbtCompound) -> Self {
+        Self {
+            orientation: piece.piece.facing.unwrap_or(BlockDirection::North),
+            piece,
+            is_structure_start: tag.get_bool("Source").unwrap_or(false),
+            last_piece_data_idx: None,
+            portal_room_exists: false,
+            pieces: Vec::new(),
+        }
+    }
     /// Matches Start(Random random, int i, int j)
     pub fn new_start(random: &mut impl RandomImpl, x: i32, z: i32) -> (Self, PendingChild) {
         let orientation = BlockDirection::get_random_horizontal_direction(random);
@@ -106,6 +120,12 @@ impl SpiralStaircasePiece {
 impl StructurePieceBase for SpiralStaircasePiece {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn add_additional_save_data(&self, tag: &mut NbtCompound) -> bool {
+        self.piece.add_additional_save_data(tag);
+        tag.put_bool("Source", self.is_structure_start);
+        true
     }
     fn get_structure_piece(&self) -> &StructurePiece {
         &self.piece.piece
